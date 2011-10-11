@@ -30,10 +30,9 @@ die "index does not exist for '$chr_file', please create one with samtools faidx
 
 my $samtools    = find_program('samtools');
 
-my $MAX_READS = 4000;
+my $MAX_READS = 0;
 my $MAX_BASES = 0;
 
-my $FILTER_BUFFER  = 100;
 my $outfile        = $opts{'o'};
 
 my $log_file       = $opts{'L'} || 0;
@@ -42,7 +41,6 @@ my $report_file    = $opts{'l'};
 
 open (my $log, "> $log_file") || die "Could not open file '$log_file': $!\n" if ( $log_file );
 
-
 my ( $s, $d, $e, $b_pre, $b_post) = (0,0,0, 0, 0);
 
 my $region      = $opts{'r'};
@@ -50,6 +48,8 @@ my $sample_size = $opts{'s'} || 0;
 $region = "'gi|170079663|ref|NC_010473.1|'";
 
 my $fasta;
+
+my %hist;
 
 my %QV_stats;
 
@@ -117,6 +117,7 @@ if ( $outfile ) {
   close( $bamout );
 }
 
+#die Dumper( \%hist );
 
 # 
 # 
@@ -145,7 +146,7 @@ sub analyse {
       next;
     }
 
-    last if ( $MAX_READS && $MAX_READS < $reads_analysed++);
+    last if ( $MAX_READS && $MAX_READS <= $reads_analysed++);
     last if ( $MAX_BASES && $MAX_BASES < $bases_analysed);
 
     # pseq: patched sequence, the aligned sequence
@@ -154,53 +155,45 @@ sub analyse {
     my $gseq = substr($fasta, $pos - 1, length( $pseq ));
     $bases_analysed += length($pseq);
 
-    if ( $current_pos && $current_pos != $pos )  {
-      # the cs_splits array needs to be synced with this new pos. Bring forth the 
-      # array as many places. If there is a gap, traverse the whole thing and reset
-      # the whole thing, so we start from fresh.
+    # the cs_splits array needs to be synced with this new pos. Bring forth the 
+    # array as many places. If there is a gap, traverse the whole thing and reset
+    # the whole thing, so we start from fresh.
+    while( @splits && $splits[0]{pos} != $pos ) {
       
-#      print  "stepping from $current_pos =>>  $pos\n";
-      for(my $i = 0; $i < $pos - $current_pos; $i++ ) {
-
-	
-	next if (! $splits[0]{total} || $splits[0]{total} == 0);
-	
-	
-	my ($right, $total) = (0, 0);
-	map { $total += $splits[0]{ $_ }||0;
-	      $right += $splits[0]{ $_ } if ( $splits[0]{ $_ } && $splits[0]{ref} eq $_)}
-	( 'A','C','G','T');
-	
-	my $ratio = phred_value( $right ,$total - $right);
-	my $skip = 0;
-
-
-	$skip++	if ( $filter_on_base_mutation_rate && $right != $total && $ratio <= $base_mutation_rate);
-
-	if ( ! $skip ) {
-	  foreach my $base ('A', 'C', 'G', 'T' ) {
-	    if ( $splits[0]{ref} eq $base ) {
-	      foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
-		$calib_stats{ $QV }{ $base }{ M }++;
-		$calib_stats{ $QV }{ M }++;
-	      }
-	    }
-	    else {
-	      foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
-		$calib_stats{ $QV }{ $base }{ X }++;
-		$calib_stats{ $QV }{ X }++;
-	      }
+#      print "Stepping from $splits[0]{pos} towards $pos\n";
+      
+      my ($right, $total) = (0, 0);
+      map { $total += $splits[0]{ $_ }||0;
+	    $right += $splits[0]{ $_ } if ( $splits[0]{ $_ } && $splits[0]{ref} eq $_)}
+      ( 'A','C','G','T');
+      
+      my $ratio = phred_value( $right ,$total - $right);
+      my $skip = 0;
+      
+      
+      $skip++	if ( $filter_on_base_mutation_rate && $right != $total && $ratio <= $base_mutation_rate);
+      
+      if ( ! $skip ) {
+	foreach my $base ('A', 'C', 'G', 'T' ) {
+	  if ( $splits[0]{ref} eq $base ) {
+	    foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+	    $calib_stats{ $QV }{ $base }{ M } += $splits[0]{QV}{$base}{ $QV };
+	    $calib_stats{ $QV }{ M } += $splits[0]{QV}{$base}{ $QV };
 	    }
 	  }
-	 } 
-
-	shift @splits;
-	
-      }
+	  else {
+	    foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+	      $calib_stats{ $QV }{ $base }{ X } += $splits[0]{QV}{$base}{ $QV };
+	      $calib_stats{ $QV }{ X } += $splits[0]{QV}{$base}{ $QV };
+	    }
+	  }
+	}
+      } 
+      
+      shift @splits;
+      
     }
 
-    $current_pos = $pos;
-    
     my @gseq  = split("", $gseq );
     my @pseq  = split("", $pseq );
     my @pqual = split("", $pqual);
@@ -214,25 +207,24 @@ sub analyse {
 	next;
       }
 
-      $splits[$i - $gaps]{ ref      } = $gseq[ $i ];
-      $splits[$i - $gaps]{ pos      } = $pos  + $i;
-      $splits[$i - $gaps]{ $pseq[$i]  }++;
-      $splits[$i - $gaps]{ QV }{ $pseq[$i]} {ord($pqual[$i]) - 33  }++;
+      $splits[$i + $gaps]{ ref      } = $gseq[ $i ];
+      $splits[$i + $gaps]{ pos      } = $pos  + $i;
+      $splits[$i + $gaps]{ $pseq[$i]  }++;
+      $splits[$i + $gaps]{ QV }{ $pseq[$i]} {ord($pqual[$i]) - 33  }++;
       next if ($pseq[ $i ] eq "-");
-      $splits[$i - $gaps]{ total    }++;
-      
+      $splits[$i + $gaps]{ total    }++;
+      $hist{ord($pqual[$i]) - 33  }++;
     }
   }
-
 
   while( @splits) {
     # the cs_splits array needs to be synced with this new pos. Bring forth the 
     # array as many places. If there is a gap, traverse the whole thing and reset
     # the whole thing, so we start from fresh.
     
-
-    next if (! $splits[0]{total} || $splits[0]{total} == 0);
-      
+    
+#    next if (! $splits[0]{total} || $splits[0]{total} == 0);
+    
       
     my ($right, $total) = (0, 0);
     map { $total += $splits[0]{ $_ }||0;
@@ -241,30 +233,28 @@ sub analyse {
     
     my $ratio = phred_value( $right ,$total - $right);
     my $skip = 0;
-    my $base_mutation_rate = phred_value(999, 1);
-    my $filter_on_base_mutation_rate = 1;
     $skip++ if ( $filter_on_base_mutation_rate && $right != $total && $ratio <= $base_mutation_rate);
-#	print "$ratio <= $base_mutation_rate); $right $total\n";
+
+#    die Dumper( $splits[0]);
       
     if ( ! $skip ) {
       foreach my $base ('A', 'C', 'G', 'T' ) {
 	if ( $splits[0]{ref} eq $base ) {
 	  foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
-	    $calib_stats{ $QV }{ $base }{ M }++;
-	    $calib_stats{ $QV }{ M }++;
+	    $calib_stats{ $QV }{ $base }{ M } += $splits[0]{QV}{$base}{ $QV };
+	    $calib_stats{ $QV }{ M } += $splits[0]{QV}{$base}{ $QV };
 	  }
 	}
 	else {
 	  foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
-	    $calib_stats{ $QV }{ $base }{ X }++;
-	    $calib_stats{ $QV }{ X }++;
+	    $calib_stats{ $QV }{ $base }{ X } += $splits[0]{QV}{$base}{ $QV };
+	    $calib_stats{ $QV }{ X } += $splits[0]{QV}{$base}{ $QV };
 	  }
 	}
       }
     } 
     
     shift @splits;
-    
   }
 
 
@@ -284,13 +274,12 @@ sub phred_value {
   return 55 if ( ! $wrong && $correct);
   return  0 if ( $wrong && ! $correct);
   
-  $wrong ||= 0;
-
   my $P = $wrong/($wrong+$correct);
   
   return 55 if ( ! $P );
   my $Q = -10 * log10( $P );
   
+  return  int ($Q );
 }
 
 
@@ -300,24 +289,6 @@ sub log10 {
   my $n = shift;
   return log($n)/log(10);
 }
-
-
-
-# 
-# 
-# 
-# Kim Brugger (28 Oct 2010)
-sub print_sam {
-  my ( $read ) = @_;
-
-#  return;
-  my $sam    = $$read{ sam   };
-  @$sam[ 1 ] = $$read{ flags };
-  @$sam[ 4 ] = $$read{ mapq  };
-  
-  print STDOUT join("\t", @$sam) . "\n";
-}
-
 
 
 # 
