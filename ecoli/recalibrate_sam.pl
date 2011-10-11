@@ -10,16 +10,18 @@ use Data::Dumper;
 use warnings;
 use Getopt::Std;
 
-my $PRE_POS     = 1;
-my $PRE_PRE_POS = 0;
-my $MIN_SPLIT      = $opts{'s'} || 60; # should probably be something like 10-15...
-my $MIN_DEPTH      = $opts{'d'} || 15; # I guess something between 7 and 20 should be good
-
-
 my %opts;
-getopts('b:d:R:B:hs:Sr:UM:m:L:l:s:', \%opts);
+getopts('b:d:R:B:hs:Sr:UM:m:L:l:s:m:o:', \%opts);
+
+my %calib_stats;
+my %calib_matrix;
+
+
 my $bam_file = $opts{'b'} || Usage();
 my $chr_file = $opts{'R'} || Usage();
+my $base_mutation_rate = $opts{'m'};
+my $filter_on_base_mutation_rate = 0 if ( $base_mutation_rate && 
+					  $base_mutation_rate > 0 && $base_mutation_rate < 100);
 
 die "'$chr_file' does not exist\n" 
     if ( ! -e $chr_file );
@@ -28,11 +30,11 @@ die "index does not exist for '$chr_file', please create one with samtools faidx
 
 my $samtools    = find_program('samtools');
 
-my $BWA = 1;
+my $MAX_READS = 4000;
+my $MAX_BASES = 0;
 
-
-my $FILTER_BUFFER  = $opts{'B'} || 100;
-my $sam_out        = $opts{'S'};
+my $FILTER_BUFFER  = 100;
+my $outfile        = $opts{'o'};
 
 my $log_file       = $opts{'L'} || 0;
 my $report_file    = $opts{'l'};
@@ -40,15 +42,12 @@ my $report_file    = $opts{'l'};
 
 open (my $log, "> $log_file") || die "Could not open file '$log_file': $!\n" if ( $log_file );
 
-my $good_trans = legal_transitions();
 
-open (STDOUT, " | $samtools view -Sb - ") || die "Could not open bam stream: $!\n" if ( !$sam_out );
-print STDOUT  `$samtools view -H $bam_file`;
 my ( $s, $d, $e, $b_pre, $b_post) = (0,0,0, 0, 0);
 
 my $region      = $opts{'r'};
 my $sample_size = $opts{'s'} || 0;
-$region = "chr:200-400";
+$region = "'gi|170079663|ref|NC_010473.1|'";
 
 my $fasta;
 
@@ -81,13 +80,43 @@ else {
 }
 
 
-if ($report_file) {
-  open( my $report, "> $report_file") || die "Could not write to '$report_file': $!\n";
-  print $report "Scrubbed ". ( $s+$d+$e) . " reads from $bam_file\n";
-  print $report "\t$s single colour errors\n";
-  print $report "\t$d double colour errors\n";
-  print $report "\t$e end    colour errors\n";
+foreach my $QV ( sort {$a <=> $b} keys %calib_stats ) {
+#x  print Dumper( $calib_stats{ $QV });
+  $calib_matrix{ chr($QV + 33) } = chr(phred_value( $calib_stats{ $QV }{ M }, $calib_stats{ $QV }{ X }) + 33 );
+  printf("$QV\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%d (%d, %d)\n",
+	 phred_value( $calib_stats{ $QV }{ M }, $calib_stats{ $QV }{ X }),
+	 phred_value( $calib_stats{ $QV }{ A }{ M }, $calib_stats{ $QV }{ A }{ X }),
+	 phred_value( $calib_stats{ $QV }{ C }{ M }, $calib_stats{ $QV }{ C }{ X }),
+	 phred_value( $calib_stats{ $QV }{ G }{ M }, $calib_stats{ $QV }{ G }{ X }),
+	 phred_value( $calib_stats{ $QV }{ T }{ M }, $calib_stats{ $QV }{ T }{ X }),
+	 ($calib_stats{ $QV }{ M } || 0) + ($calib_stats{ $QV }{ X } || 0),
+	 ($calib_stats{ $QV }{ M } || 0) , ($calib_stats{ $QV }{ X } || 0),
+      ) if (1);
 }
+
+if ( $outfile ) {
+  $outfile .= ".bam" if ( $outfile !~ /bam\z/);
+
+  my $reads_recalibrated = 0;
+
+  open (my $bamout, " | $samtools view -o $outfile -Sb - ") || die "Could not open bam stream: $!\n";
+#  open (my $bamout, " | echo  ") || die "Could not open bam stream: $!\n";
+#  print $bamout `$samtools view -H $bam_file`;
+  print $bamout `$samtools view -H $bam_file`;
+
+  open (my $bamin, "$samtools view $bam_file | ") || die "Could not open 'stream': $!\n";
+  while(<$bamin>) {
+
+    last if ( $MAX_READS && $MAX_READS <= $reads_recalibrated++);
+
+    my @F = split("\t");
+    $F[10] = join("", map{ $calib_matrix{ $_ } || $_} split(//, $F[10]));
+    print $bamout join("\t", @F);
+  }
+  close($bamin);
+  close( $bamout );
+}
+
 
 # 
 # 
@@ -100,131 +129,95 @@ sub analyse {
 
   my $current_pos = undef;
 
+#  print "$samtools view $bam_file $region\n";
+
+  my ($reads_analysed, $bases_analysed) = (0,0);
+
   open (my $bam, "$samtools view $bam_file $region | ") || die "Could not open 'stream': $!\n";
   while(<$bam>) {
 
     chomp;
     my @F = split("\t");
-    my ($id, $flags, $chr, $pos, $mapq, $cigar, $mate, $mate_pos, $insert_size, $seq, $quality, @opts) = @F;
+    my ($id, $flags, $chr, $pos, $mapq, $cigar, $mate, $mate_pos, $insert_size, $seq, $qual, @opts) = @F;
     
-    my $entry = { sam    => \@F,
-		  id     => $id,
-		  flags  => $flags, 
-		  chr    => $chr, 
-		  cigar  => $cigar,
-		  pos    => $pos};
-    
-
     # Not a mapped read
     if ($flags & 0x0004 ) {
       next;
     }
 
-    if ( 0 && $current_pos && $current_pos != $pos )  {
+    last if ( $MAX_READS && $MAX_READS < $reads_analysed++);
+    last if ( $MAX_BASES && $MAX_BASES < $bases_analysed);
+
+    # pseq: patched sequence, the aligned sequence
+    # pqual: the quality values for the aligned bases.
+    my ($pseq, $pqual) = patch_alignment($seq, $qual, $cigar);
+    my $gseq = substr($fasta, $pos - 1, length( $pseq ));
+    $bases_analysed += length($pseq);
+
+    if ( $current_pos && $current_pos != $pos )  {
       # the cs_splits array needs to be synced with this new pos. Bring forth the 
       # array as many places. If there is a gap, traverse the whole thing and reset
       # the whole thing, so we start from fresh.
       
-      print STDERR "stepping from $current_pos =>>  $pos\n";
+#      print  "stepping from $current_pos =>>  $pos\n";
       for(my $i = 0; $i < $pos - $current_pos; $i++ ) {
 
-	# This is a sliding array, keeping track of all the colour balances, and update the SNP array...
-	shift @ref_ids if ( @ref_ids >= 2 );
 	
 	next if (! $splits[0]{total} || $splits[0]{total} == 0);
 	
 	
-	my ($right) = (0);
-	map { $right += $splits[0]{ $_ } if ( $splits[0]{ $_ } && $splits[0]{ref} eq $_)} ( 'O','1','2','3');
+	my ($right, $total) = (0, 0);
+	map { $total += $splits[0]{ $_ }||0;
+	      $right += $splits[0]{ $_ } if ( $splits[0]{ $_ } && $splits[0]{ref} eq $_)}
+	( 'A','C','G','T');
 	
-	push @ref_ids, [$splits[0]{pos}, $right*100/$splits[0]{total}, $splits[0]{total}];
+	my $ratio = phred_value( $right ,$total - $right);
+	my $skip = 0;
+
+
+	$skip++	if ( $filter_on_base_mutation_rate && $right != $total && $ratio <= $base_mutation_rate);
+
+	if ( ! $skip ) {
+	  foreach my $base ('A', 'C', 'G', 'T' ) {
+	    if ( $splits[0]{ref} eq $base ) {
+	      foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+		$calib_stats{ $QV }{ $base }{ M }++;
+		$calib_stats{ $QV }{ M }++;
+	      }
+	    }
+	    else {
+	      foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+		$calib_stats{ $QV }{ $base }{ X }++;
+		$calib_stats{ $QV }{ X }++;
+	      }
+	    }
+	  }
+	 } 
+
 	shift @splits;
-	
-	if ( @ref_ids == 2 && 
-	     $ref_ids[ $PRE_PRE_POS ] && $ref_ids[ $PRE_POS ]  &&
-	     $ref_ids[ $PRE_PRE_POS ][ 1 ] < $MIN_SPLIT && 
-	     $ref_ids[ $PRE_POS ][ 1 ]     < $MIN_SPLIT && 
-	     $ref_ids[ $PRE_POS ][ 2 ]     > $MIN_DEPTH     &&
-	     $ref_ids[ $PRE_PRE_POS ][ 2 ] > $MIN_DEPTH ) {
-
-
-	  print STDERR "SNP at pos $region:".($current_pos  + $i)." (depth: $ref_ids[ $PRE_POS ][ 2 ]) splits: ($ref_ids[ $PRE_PRE_POS ][1], $ref_ids[ $PRE_POS ][1])\n";
-	  push @SNPs, [$ref_ids[ $PRE_PRE_POS ], $ref_ids[ $PRE_POS ]];
-	}
-	
-	if ( @reads &&  $reads[0]{ pos } + $FILTER_BUFFER <= $pos + $i ) {
-	  #remove SNPs further behind that we will ever be seeing again...
-#	print STDERR "Buffered SNPs: " . @SNPs . "\n". " ($reads[0]{ pos } + $FILTER_BUFFER > $SNPs[0][1][0]); \n";
-	  while ( @SNPs ) { 
-#	  print STDERR Dumper( $SNPs[0]);
-	    
-	    last 	if ($reads[0]{ pos } - $FILTER_BUFFER < $SNPs[0][1][0]);
-	    my @snp = shift @SNPs;
-	  }
-#	print STDERR "Buffered SNPs: " . @SNPs . "\n". " ($reads[0]{ pos } + $FILTER_BUFFER > $SNPs[0][1][0]); \n";
-#	print STDERR "---------------------------------\n";
-#	  exit;
-	  
-	  #scrub all the reads that are far enough away..
-	  while ( @reads > 0 && $reads[0]{ pos } + $FILTER_BUFFER < $pos + $i ) {
-	    my $read = shift @reads;
-	    
-	    scrub( $read, \@SNPs);
-	    print_sam( $read );
-	  }
-	  
-#	print "Post-removal nr of reads: " . @reads ."\n";
-	  
-	}
 	
       }
     }
+
     $current_pos = $pos;
     
-    
-#  print "pos: $current_pos, buffered reads: " . @reads . "\n";
-    
-    
-    my $hlen = length($csfasta);
-    if ( 1 &&  $cigar =~ /[IDNP]/) {
-      my $t_cigar = $cigar;
-      my $padding = 2;
-      $t_cigar =~ s/(\d+)[ID]/ {$padding += $1}/ge;
-      $hlen += $padding;
-    }
-
-    my $gseq = substr($fasta, $pos - 1, $hlen);
-
-    # for some odd reason, I cannot be arsed to figure out right now...
-#  $gseq = substr($gseq, 0, length($csfasta)) if ( length( $gseq) > length($csfasta));
-    
-    # pseq: patched sequence, the aligned sequence
-    # pqual: the quality values for the aligned bases.
-    my ($pseq, $pqual) = patch_alignment($seq, $qual, $cigar);
-
-    $$entry{end  } = $pos + length($pseq);
-    $$entry{pseq } = $pseq;
-    $$entry{pqual} = $pqual;
-
-    push @reads, $entry;
-#  print "$csfasta\n";
-    
-    my @gseq = split("", $gseq);
-    my @pseq = split("", $pseq);
+    my @gseq  = split("", $gseq );
+    my @pseq  = split("", $pseq );
+    my @pqual = split("", $pqual);
     my $gaps = 0;
-    for(my $i = 0; $i<@gesq; $i++ ) {
+    for(my $i = 0; $i<@gseq; $i++ ) {
       
       # there is an insert in the reference, so this number needs to 
       # be subtracted to get the real genome position.
-      if ($gcsf[ $i ] eq "-") {
+      if ($gseq[ $i ] eq "-") {
 	$gaps++;
 	next;
       }
 
       $splits[$i - $gaps]{ ref      } = $gseq[ $i ];
       $splits[$i - $gaps]{ pos      } = $pos  + $i;
-      $splits[$i - $gaps]{ B  }{ $pseq[$i]  }++;
-      $splits[$i - $gaps]{ QV }{ $pqual[$i] }++;
+      $splits[$i - $gaps]{ $pseq[$i]  }++;
+      $splits[$i - $gaps]{ QV }{ $pseq[$i]} {ord($pqual[$i]) - 33  }++;
       next if ($pseq[ $i ] eq "-");
       $splits[$i - $gaps]{ total    }++;
       
@@ -232,18 +225,81 @@ sub analyse {
   }
 
 
-  print Dumper( \%splits );
-
-# empty the reads buffer..
-  while ( @reads ) {
-    my $read = shift @reads;
+  while( @splits) {
+    # the cs_splits array needs to be synced with this new pos. Bring forth the 
+    # array as many places. If there is a gap, traverse the whole thing and reset
+    # the whole thing, so we start from fresh.
     
-    scrub( $read, \@SNPs);
-    print_sam( $read );
+
+    next if (! $splits[0]{total} || $splits[0]{total} == 0);
+      
+      
+    my ($right, $total) = (0, 0);
+    map { $total += $splits[0]{ $_ }||0;
+	  $right += $splits[0]{ $_ } if ( $splits[0]{ $_ } && $splits[0]{ref} eq $_)}
+    ( 'A','C','G','T');
+    
+    my $ratio = phred_value( $right ,$total - $right);
+    my $skip = 0;
+    my $base_mutation_rate = phred_value(999, 1);
+    my $filter_on_base_mutation_rate = 1;
+    $skip++ if ( $filter_on_base_mutation_rate && $right != $total && $ratio <= $base_mutation_rate);
+#	print "$ratio <= $base_mutation_rate); $right $total\n";
+      
+    if ( ! $skip ) {
+      foreach my $base ('A', 'C', 'G', 'T' ) {
+	if ( $splits[0]{ref} eq $base ) {
+	  foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+	    $calib_stats{ $QV }{ $base }{ M }++;
+	    $calib_stats{ $QV }{ M }++;
+	  }
+	}
+	else {
+	  foreach my $QV (keys %{$splits[0]{QV}{$base}} ) {
+	    $calib_stats{ $QV }{ $base }{ X }++;
+	    $calib_stats{ $QV }{ X }++;
+	  }
+	}
+      }
+    } 
+    
+    shift @splits;
     
   }
+
+
 }
 
+
+# 
+# 
+# 
+# Kim Brugger (11 Oct 2011)
+sub phred_value {
+  my ($correct, $wrong) = @_;
+
+#  print "[$wrong] [$correct]\n";
+
+  return -1 if ( !$wrong && ! $correct);
+  return 55 if ( ! $wrong && $correct);
+  return  0 if ( $wrong && ! $correct);
+  
+  $wrong ||= 0;
+
+  my $P = $wrong/($wrong+$correct);
+  
+  return 55 if ( ! $P );
+  my $Q = -10 * log10( $P );
+  
+}
+
+
+
+
+sub log10 {
+  my $n = shift;
+  return log($n)/log(10);
+}
 
 
 
@@ -261,6 +317,133 @@ sub print_sam {
   
   print STDOUT join("\t", @$sam) . "\n";
 }
+
+
+
+# 
+# 
+# 
+# Kim Brugger (20 Jul 2009)
+sub patch_alignment {
+  my ( $seq, $qual, $cigar ) = @_;
+
+  return ($seq, $qual) if ( $cigar !~ /[DIS]/);
+  
+  my @seq  = split("", $seq );
+  my @qual = split("", $qual );
+
+
+  my (@cigar) = $cigar =~ /(\d*\w)/g;
+
+  my $offset = 0;
+
+  # Extended cigar format definition ( from the sam/bam format file)
+  # M Alignment match (can be a sequence match or mismatch)
+  # I Insertion to the reference
+  # D Deletion from the reference
+  # N Skipped region from the reference
+  # S Soft clip on the read (clipped sequence present in <seq>)
+  # H Hard clip on the read (clipped sequence NOT present in <seq>)
+  # P Padding (silent deletion from the padded reference sequence)
+
+
+
+  foreach my $patch ( @cigar ) {
+    my ($length, $type) =  $patch =~ /(\d+)(\w)/;
+
+    if ( $type eq 'M') {
+      $offset += $length;
+      next;
+    }
+    elsif ( $type eq "D") {
+      my @dashes = split("", "-"x$length);
+      splice(@seq,  $offset, 0, @dashes);
+      splice(@qual, $offset, 0, @dashes);
+      $offset += $length;
+    }
+    elsif ( $type eq "I" || $type eq "S" ) {
+      splice(@seq,  $offset, $length);
+      splice(@qual, $offset, $length);
+    }    
+
+  }
+
+  return (join("", @seq), join("",@qual));
+}
+
+
+
+
+#
+# Read the fasta files and puts entries into a nice array
+#
+sub readfasta {
+  my ($file, $region) = @_;  
+
+  $region =~ s/:\d+-\d+//;
+
+  my $sequence;
+  my $header;
+
+  open (my $f, "$samtools faidx $file $region|" ) || die "Could not open $file:$1\n";
+  while (<$f>) {
+    chomp;
+    if (/^\>/) {
+      if ($header) { # we have a name and a seq
+	return ($header, $sequence);
+      }
+      $header = $_;
+      $header =~ s/^\>//;
+    }
+    else {$sequence .= $_;}
+  }
+
+  return $sequence;
+}
+
+
+
+
+# 
+# 
+# 
+# Kim Brugger (13 Jul 2010)
+sub find_program {
+  my ($program) = @_;
+  
+  my $username = scalar getpwuid $<;
+  
+  my @paths = ("/home/$username/bin/",
+	       "./",
+	       "/usr/local/bin");
+  
+  foreach my $path ( @paths ) {
+    return "$path/$program" if ( -e "$path/$program" );
+  }
+
+  my $location = `which $program`;
+  chomp( $location);
+  
+  return $location if ( $location );
+  
+  die "Could not find '$program'\n";
+}
+
+
+# 
+# 
+# 
+# Kim Brugger (05 Nov 2010)
+sub Usage {
+  $0 =~ s/.*\///;
+  die "USAGE: $0 -b<am file> -R<eference genome (fasta)> -d[ min depth, default=15] -s[ min Split, default=60] -B[uffer, default=100] -M[ set mapq score for offending reads] -U[n set mapped flag for offending reads]\n";
+
+  # tests :::: odd SNP reporting:  10:74879852-74879852
+  # large indel: 10:111800742
+}
+
+
+__END__
 
 
 # 
@@ -307,8 +490,8 @@ sub scrub {
 	print STDERR "$$read{id} -- $$read{cigar} $$read{flags}\n$$read{a}";
 	
 	
-	$$read{flags} += 4 if ( $set_unmapped );
-	$$read{mapq}   = $set_mapq_score if ( defined $set_mapq_score);
+#	$$read{flags} += 4 if ( $set_unmapped );
+#	$$read{mapq}   = $set_mapq_score if ( defined $set_mapq_score);
 	push @{$$read{sam}}, "ES:Z:1";
 	$s++;
 	return;
@@ -358,212 +541,3 @@ sub scrub {
 }
 
 
-
-# 
-# probe vs genome
-# 
-# Kim Brugger (13 Oct 2010)
-sub align {
-  my ( $s1, $s2, $strand) = @_;
-
-  return ([],[], "NA\n") if ($s1 eq $s2);
-
-  my @s1 = split("", $s1);
-  my @s2 = split("", $s2);
-
-  my (@singles, @align, @doubles);
-  my $snp = 0;
-  
-  for(my $i = 0; $i < @s1; $i++) {
-    if ( $s1[$i] eq $s2[$i] ) {
-      $align[ $i ] = 1;
-      $snp = 0;
-    }
-    else {
-      $align[ $i ] = 0;
-      # Check and see if this is a double "error" IE a SNP
-      if ( $i > 0 && ! $align[ $i - 1 ]) {
-
-	if ( !$snp ) {
-	  push @doubles, [$singles[-1], $i];
-	  pop @singles;
-
-	}
-	$snp = 1;
-	$doubles[-1][1] = $i;
-      }
-      else {
-	push @singles, $i;
-	$snp = 0;
-      }
-    }
-  }
-
-  my @long;
-
-  foreach my $d ( @doubles ) {
-    
-    my $s1_d = join("",@s1[$$d[0]..$$d[1]]);
-    my $s2_d = join("",@s2[$$d[0]..$$d[1]]);
-
-    if ( ! $$good_trans{$s1_d}{$s2_d}) {
-      push @long, $d;      
-    }
-    
-  }
-
-  if ( 1 ) {
-    my $align = join("", @align);
-    $align =~ tr/01/ \|/;
-#    print STDERR "$s1\n$align\n$s2\n\n" if ( @singles || @long);
-    return( \@singles, \@long, "$s1\n$align\n$s2\n\n");
-  }
-
-  return( \@singles, \@long, );
-}
-
-
-
-
-
-
-sub patch_alignment {
-  my ( $read, $ref, $cigar ) = @_;
-
-  # Extended cigar format definition ( from the sam/bam format file)
-  # M Alignment match (can be a sequence match or mismatch)
-  # I Insertion to the reference
-  # D Deletion from the reference
-  # N Skipped region from the reference
-  # S Soft clip on the read (clipped sequence present in <seq>)
-  # H Hard clip on the read (clipped sequence NOT present in <seq>)
-  # P Padding (silent deletion from the padded reference sequence)
-
-  if ( $cigar !~ /[HDIS]/) {
-    $ref = substr($ref, 0, length($read));
-    return ($read, $ref);
-  }
-  
-  my @read  = split("", $read );
-  my @ref   = split("", $ref );
-  
-  my $ref_cigar = $cigar;
-  $ref_cigar =~ s/^\d+[HDS]//;
-
-  my (@cigar) = $ref_cigar =~ /(\d+\w)/g;
-
-  my $offset = 0;
-  foreach my $patch ( @cigar ) {
-    my ($length, $type) =  $patch =~ /(\d+)(\w)/;
-
-    if ( $type eq 'M') {
-      $offset += $length;
-      next;
-    }
-    elsif ( $type eq "I") {
-      my @dashes = split("", "-"x$length);
-      splice(@ref, $offset, 0, @dashes);
-    }
-    elsif ( $type eq "S" || $type eq "H") {
-      splice(@ref,  $offset, $length);
-    }    
-  }
-
-  if (1){
-    $offset = 0;
-    my (@cigar) = $cigar =~ /(\d+\w)/g;
-    foreach my $patch ( @cigar ) {
-      my ($length, $type) =  $patch =~ /^(\d+)(\w)/;
-
-      if ( $type eq 'M') {
-	$offset += $length;
-	next;
-      }
-      elsif ( $type eq "D") {
-	my @dashes = split("", "-"x$length);
-	splice(@read,  $offset, 0, @dashes);
-	$offset += $length;
-      }
-      elsif ( $type eq "H" || $type eq "S") {
-      splice(@read,  $offset, $length);
-      }    
-    
-    }
-  }
-  $read = join("", @read);
-  $ref  = join("", @ref );
-
-  $ref = substr($ref, 0, length($read));
-  
-  return ($read, $ref);
-}
-
-
-
-
-#
-# Read the fasta files and puts entries into a nice array
-#
-sub readfasta {
-  my ($file, $region) = @_;  
-
-  my $sequence;
-  my $header;
-  
-  open (my $f, "$samtools faidx $file $region |" ) || die "Could not open $file:$1\n";
-  while (<$f>) {
-    chomp;
-    if (/^\>/) {
-      if ($header) { # we have a name and a seq
-	return ($header, $sequence);
-      }
-      $header = $_;
-      $header =~ s/^\>//;
-    }
-    else {$sequence .= $_;}
-  }
-  
-
-  return ($sequence);
-}
-
-
-
-
-# 
-# 
-# 
-# Kim Brugger (13 Jul 2010)
-sub find_program {
-  my ($program) = @_;
-  
-  my $username = scalar getpwuid $<;
-  
-  my @paths = ("/home/$username/bin/",
-	       "./",
-	       "/usr/local/bin");
-  
-  foreach my $path ( @paths ) {
-    return "$path/$program" if ( -e "$path/$program" );
-  }
-
-  my $location = `which $program`;
-  chomp( $location);
-  
-  return $location if ( $location );
-  
-  die "Could not find '$program'\n";
-}
-
-
-# 
-# 
-# 
-# Kim Brugger (05 Nov 2010)
-sub Usage {
-  $0 =~ s/.*\///;
-  die "USAGE: $0 -b<am file> -R<eference genome (fasta)> -d[ min depth, default=15] -s[ min Split, default=60] -B[uffer, default=100] -M[ set mapq score for offending reads] -U[n set mapped flag for offending reads]\n";
-
-  # tests :::: odd SNP reporting:  10:74879852-74879852
-  # large indel: 10:111800742
-}
