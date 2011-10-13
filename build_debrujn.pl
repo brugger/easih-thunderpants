@@ -13,16 +13,16 @@ no warnings "recursion";
 
 
 my %graph;
-
+my %starts;
 my $kmer = 27;
 
-my %starts;
 
-my ($name, $seq);
+my $seq;
 
 my $exit_counter = 200;
 
 my $reads = 0;
+my $name = 1;
 
 while(<>) {
   chomp;
@@ -34,14 +34,13 @@ while(<>) {
       last if ($exit_counter-- <= 0);
       $seq = "";
       $reads++;
-      
     }
-    $name = $_;
+    $name++;
+#    $name = $_;
   }
   else {
     $seq .= $_;
   }
-
 }
 
 
@@ -49,8 +48,8 @@ foreach my $sub_seq ( keys %graph ) {
   
   foreach my $edge (keys %{$graph{ $sub_seq } } ) {
 
-    if ( @{$graph{ $sub_seq }{ $edge }} < 2) {
-#      print "Deleting $sub_seq --> $edge ".(@{$graph{ $sub_seq }{ $edge }})."\n";
+    if ( keys %{$graph{ $sub_seq }{ $edge }} <= 20) {
+#      print "Deleting $sub_seq --> $edge ".(keys %{$graph{ $sub_seq }{ $edge }})."\n";
 #      delete( $graph{$edge});
       delete($graph{ $sub_seq }{ $edge });
     }
@@ -62,8 +61,8 @@ foreach my $sub_seq ( keys %graph ) {
 
 
 
-#print Dumper( \%starts );
-#print Dumper( \%graph );
+print Dumper( \%starts );
+print Dumper( \%graph );
 #exit;
 
 print "-------------\n";
@@ -101,7 +100,6 @@ foreach my $start ( keys %starts ) {
 #    exit;
 
   }
-
 }
 
 
@@ -116,7 +114,7 @@ sub path_finder {
   my @post_poss = keys %{$graph{$pos}};
   foreach my $post_pos ( @post_poss ) {
 #    _path_finder($post_pos, $post_pos);
-    _path_finder($pos. substr($post_pos, -1), $post_pos);
+    _path_finder($pos. substr($post_pos, -1), $post_pos, $graph{ $pos }{$post_pos});
   }
   
   
@@ -128,9 +126,12 @@ sub path_finder {
 # 
 # Kim Brugger (07 Oct 2011)
 sub _path_finder {
-  my ($pre_path, $pos) = @_;
+  my ($pre_path, $pos, $legacy) = @_;
 
-#  print "$pre_path\n";
+#  die Dumper( $legacy );
+
+#  print "$pre_path -- $pos\n";
+
 
   my @post_poss = keys %{$graph{$pos}};
 #  if (! @post_poss  || @post_poss > 1) {
@@ -139,8 +140,25 @@ sub _path_finder {
     return;
   }
   foreach my $post_pos ( @post_poss ) {
-    _path_finder ($pre_path ."" .substr($post_pos, -1), $post_pos);
-#    _path_finder ($pre_path ." -- $post_pos", $post_pos);
+    
+    my $shared_read = 0;
+    foreach my $read ( keys %{$graph{ $pos }{$post_pos}} ) {
+      if ( $$legacy{ $read }) {
+#      print "SHARED READ :: $read $post_pos\n";
+	$shared_read++;
+	last;
+      }
+    }
+
+    
+    
+
+    next if ( !$shared_read );
+    
+    if ( $shared_read ) {
+      my %new_legacy = (%{$graph{ $pos }{$post_pos}}, %$legacy);
+      _path_finder ($pre_path ."" .substr($post_pos, -1), $post_pos, \%new_legacy );
+    }
   }
   
   
@@ -161,7 +179,7 @@ sub _path_finder {
 sub add_to_graph {
   my ($name, $seq) = @_;
 
-  print "$seq\n";
+#  print "$seq\n";
   
   my $old_kmer = "";
 
@@ -170,9 +188,9 @@ sub add_to_graph {
 #    print "$sub_seq $old_kmer\n";
     if ( $old_kmer) {
 #      $graph{$old_kmer}{$sub_seq}++;
-      push @{$graph{$old_kmer}{$sub_seq}}, $name;
+      $graph{$old_kmer}{$sub_seq}{$name}++;
       if ( $i == 1 ) {
-	$starts{ $old_kmer}++;
+	$starts{ $old_kmer }++;
       }
     }
     $old_kmer = $sub_seq;
