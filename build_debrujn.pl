@@ -50,19 +50,24 @@ else {
   DeBruijn::readin_file(shift);
 }
 
-DeBruijn::drop_orphans();
+#DeBruijn::drop_orphans();
+
+DeBruijn::dump_graph();
 
 #DeBruijn::delete_low_weight();
 #DeBruijn::merge_singletons();
-#print "Start simplifying graph with ".DeBruijn::count_nodes()." nodes...\n";
+print "Start simplifying graph with ".DeBruijn::count_nodes()." nodes...\n";
 while (DeBruijn::merge_singletons() ) {
-#  print "Simplifying graph (".DeBruijn::count_nodes()." nodes)...\n";
+  print "Simplifying graph (".DeBruijn::count_nodes()." nodes)...\n";
   ;
 }
-#print "Done simplifying graph, ".DeBruijn::count_nodes()." nodes left\n";
+print "Done simplifying graph, ".DeBruijn::count_nodes()." nodes left\n";
 DeBruijn::drop_orphans();
 
-#DeBruijn::dump_graph();
+
+
+#DeBruijn::_merge_nodes('CACATTTCTTGGAGTACTCTACGTCTGAGT', 'TTTCTTGGAGTACTCTACGTCTGAGTG');
+#DeBruijn::_merge_nodes('TTTCTTGGAGTACTCTACGTCTGAGTG', 'CACATTTCTTGGAGTACTCTACGTCTGAGT');
 
 
 DeBruijn::print_tab();
