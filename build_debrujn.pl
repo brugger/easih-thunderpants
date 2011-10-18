@@ -11,9 +11,11 @@ use Data::Dumper;
 
 no warnings "recursion";
 
+use lib './';
+use DeBruijn;
+
 
 my %graph;
-my %starts;
 my $kmer = 27;
 
 
@@ -24,57 +26,69 @@ my $exit_counter = 200;
 my $reads = 0;
 my $name = 1;
 
-while(<>) {
-  chomp;
-
-  if ( /\>/  ) {
-    if ( $seq ) {
+if (0) {
+  while(<>) {
+    chomp;
+    
+    if ( /\>/  ) {
+      if ( $seq ) {
 #      print "$name\n";
-      add_to_graph( $name, $seq );
-      last if ($exit_counter-- <= 0);
-      $seq = "";
-      $reads++;
-    }
-    $name++;
+	DeBruijn::add_sequence( $name, $seq );
+	last if ($exit_counter-- <= 0);
+	$seq = "";
+	$reads++;
+      }
+      $name++;
 #    $name = $_;
-  }
-  else {
-    $seq .= $_;
-  }
-}
-
-
-foreach my $sub_seq ( keys %graph ) {
-  
-  foreach my $edge (keys %{$graph{ $sub_seq } } ) {
-
-    if ( keys %{$graph{ $sub_seq }{ $edge }} <= 20) {
-#      print "Deleting $sub_seq --> $edge ".(keys %{$graph{ $sub_seq }{ $edge }})."\n";
-#      delete( $graph{$edge});
-      delete($graph{ $sub_seq }{ $edge });
+    }
+    else {
+      $seq .= $_;
     }
   }
-
-  delete( $graph{ $sub_seq } ) if ( keys %{$graph{ $sub_seq } } == 0 );
-  
+}
+else {
+  DeBruijn::readin_file(shift);
 }
 
+DeBruijn::drop_orphans();
+
+#DeBruijn::delete_low_weight();
+#DeBruijn::merge_singletons();
+#print "Start simplifying graph with ".DeBruijn::count_nodes()." nodes...\n";
+while (DeBruijn::merge_singletons() ) {
+#  print "Simplifying graph (".DeBruijn::count_nodes()." nodes)...\n";
+  ;
+}
+#print "Done simplifying graph, ".DeBruijn::count_nodes()." nodes left\n";
+DeBruijn::drop_orphans();
+
+#DeBruijn::dump_graph();
 
 
-print Dumper( \%starts );
-print Dumper( \%graph );
-#exit;
+DeBruijn::print_tab();
+DeBruijn::path_finder();
 
-print "-------------\n";
+
+
+foreach my $start ( keys %graph ) {  
+
+  foreach my $key (keys %{$graph{ $start }} ) {
+
+    print join("\t", $start, $key, int(keys %{$graph{$start}{$key}}), "\n");
+
+  }
+}
+
+exit;
+
 
 
 #print Dumper(\%starts );
 
-foreach my $start ( keys %starts ) {  
+foreach my $start ( keys %{$graph{S}} ) {  
 
   #print Dumper( $graph{ $start}) if ($graph{ $start});
 
-  next if ( $starts{$start} < 2 );
 
   path_finder("", $start );  
   next;
@@ -165,35 +179,3 @@ sub _path_finder {
 }
 
 
-
-#print Dumper( \%starts );
-
-#print "Readin $reads reads\n";
-#print Dumper( \%graph );
-
-
-# 
-# 
-# 
-# Kim Brugger (06 Oct 2011)
-sub add_to_graph {
-  my ($name, $seq) = @_;
-
-#  print "$seq\n";
-  
-  my $old_kmer = "";
-
-  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
-    my $sub_seq = substr( $seq, $i, $kmer);
-#    print "$sub_seq $old_kmer\n";
-    if ( $old_kmer) {
-#      $graph{$old_kmer}{$sub_seq}++;
-      $graph{$old_kmer}{$sub_seq}{$name}++;
-      if ( $i == 1 ) {
-	$starts{ $old_kmer }++;
-      }
-    }
-    $old_kmer = $sub_seq;
-  }
-
-}
