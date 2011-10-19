@@ -50,9 +50,14 @@ else {
   DeBruijn::readin_file(shift);
 }
 
-#DeBruijn::drop_orphans();
+#DeBruijn::_merge_nodes('CACATTTCTTGGAGTACTCTACGTCTGAGT', 'TTTCTTGGAGTACTCTACGTCTGAGTG');
+#DeBruijn::_merge_nodes('CAATGGGACGGAGCGGGTGCGGTTCCT', 'AATGGGACGGAGCGGGTGCGGTTCCTG');
+#exit;
 
-DeBruijn::dump_graph();
+DeBruijn::drop_orphans();
+
+
+#DeBruijn::dump_graph();
 
 #DeBruijn::delete_low_weight();
 #DeBruijn::merge_singletons();
@@ -66,12 +71,11 @@ DeBruijn::drop_orphans();
 
 
 
-#DeBruijn::_merge_nodes('CACATTTCTTGGAGTACTCTACGTCTGAGT', 'TTTCTTGGAGTACTCTACGTCTGAGTG');
 #DeBruijn::_merge_nodes('TTTCTTGGAGTACTCTACGTCTGAGTG', 'CACATTTCTTGGAGTACTCTACGTCTGAGT');
 
 
 DeBruijn::print_tab();
-DeBruijn::path_finder();
+#DeBruijn::path_finder();
 
 
 

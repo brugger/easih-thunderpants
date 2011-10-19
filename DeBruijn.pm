@@ -61,6 +61,7 @@ sub merge_singletons {
 
   my $merged_nodes = 0;
 
+#  dump_graph();
 # Remove edges only supported by a few reads
   my %handled;
  
@@ -73,6 +74,7 @@ sub merge_singletons {
     if ( _out( $node ) == 1) {
       my $edge  = (_out( $node ))[0];
       # The next node has more than one incoming arch
+      next if ( $handled{ $edge });
 
       next if ( _in( $edge ) > 1);
       next if ( $handled{ $edge });
@@ -90,98 +92,6 @@ sub merge_singletons {
   return $merged_nodes;
 } 
 
-
-# 
-# 
-# 
-# Kim Brugger (14 Oct 2011)
-sub merge_singletons_old {
-
-  my $merged_nodes = 0;
-
-# Remove edges only supported by a few reads
-  my %handled = ('E' => 1);
- 
-  foreach my $node ( keys %graph ) {
-    
-    next if ( $handled{ $node } );
-
-    # there is only one arch out from this node.
-    if ( keys %{$graph{ $node }{'OUT'} } == 1) {
-      my $edge  = (keys %{$graph{ $node }{'OUT'}})[0];
-      # The next node has more than one incoming arch
-
-
-      next if ( keys %{$graph{ $edge }{'IN'}} > 1);
-
-      next if ( $handled{ $edge });
-
-      # Calculate the new key
-      my $merged_node = $node . substr($edge, $kmer - 1 );
-
-      if ( $graph{ $merged_node } ) {
-	print "$merged_node already exists\n";
-	next;
-      }
-
-#      print "$node  +  $edge -->  $merged_node\n";
-#      print_node( $node );
-#      print_node( $edge );
-
-      # create the new node with the new key
-      $graph{ $merged_node } = $graph{ $edge };
-      %{$graph{ $merged_node }{'IN'}} = %{$graph{ $node }{'IN'}} if ($graph{ $node }{'IN'});
-
-#      print "---- PRE ----\n";
-      
-      # rename all the Incomming connections from the upstream node
-      foreach my $pre ( keys %{$graph{ $merged_node }{'IN'} }) {
-
-	if ( ! $graph{$pre}) {
-	  print STDERR "PRE :: $pre does not exist!\n";
-	  next;
-	}
-#	print_node( $pre );
-	$graph{ $pre }{ 'OUT' }{ $merged_node } = $graph{ $pre }{ 'OUT' }{ $node };
-	delete($graph{ $pre }{ 'OUT' }{ $node });
-#	print_node( $pre );
-	
-      }
-
-#      print "---- POST ----\n";
-      # rename all the Incomming connections from the upstream node
-      foreach my $post ( keys %{$graph{ $merged_node }{'OUT'} }) {
-
-	if ( ! $graph{$post}) {
-	  print STDERR "POST :: $post does not exist!\n";
-	  next;
-	}
-
-#	print_node( $post );
-	$graph{ $post }{ 'IN' }{ $merged_node } = $graph{ $post }{ 'IN' }{ $edge };
-	delete($graph{ $post }{ 'IN' }{ $edge });
-#	print_node( $post );
-	
-      }
-      
-      delete( $graph{ $node });
-      delete( $graph{ $edge });      
-
-#      print "----\n";
-#      print_node( $merged_node );
-#      print "-------\n\n";
-      
-
-      $handled{ $node }++;
-      $handled{ $edge }++;
-      $merged_nodes++;
-    }
-  }
-
-#  print Dumper( \%graph );
-  
-  return $merged_nodes;
-} 
 
 
 
@@ -206,11 +116,11 @@ sub count_nodes {
 sub _id {
   my ( $node, $id ) = @_;
 
-  if ( $id && ref($id) eq "SCALAR" ) {
+  if ( $id ) {
     $graph{ $node }[ $ID ] = $id;
   }
        
-  return  \%{$graph{ $node }[ $ID ]};
+  return $graph{ $node }[ $ID ];
 }
 
 
@@ -251,10 +161,6 @@ sub _in {
 sub _out {
   my ( $node, $out ) = @_;
 
-  if ( $out && ref($out) eq "HASH" ) {
-    $graph{ $node }[ $OUT ] = $out;
-  }
-
   return keys %{$graph{ $node }[ $OUT]};
 }
 
@@ -266,6 +172,8 @@ sub _out {
 # Kim Brugger (18 Oct 2011)
 sub _merge_nodes {
   my ($node1, $node2) = @_;
+
+  my $verbose_function = 0;
 
   if ( ! $graph{$node1} ) {
     print STDERR "$node1 does not exist cannot merge it with $node2\n";
@@ -301,7 +209,6 @@ sub _merge_nodes {
     return;
   }
 
-#    print STDERR "The two nodes does overlap\n$node1  $node2\n";
 #  print STDERR  "New node: $merged_node\n";
 
   if ( $graph{ $merged_node } ) {
@@ -309,12 +216,18 @@ sub _merge_nodes {
     return;
   }
 
-#      print "$node  +  $node2 -->  $merged_node\n";
-#  print_node( $node1 );
-#  print_node( $node2 );
+  if ( $verbose_function ) {
+    print "\n$node1  +  $node2 -->  $merged_node\n\n";
+    print_node( $node1 );
+    print_node( $node2 );
+    print "\n";
+  }
 
-  # create the new node with the new key
+  # create the new node with the new key, and update the id
   $graph{ $merged_node } = $graph{ $node2 };
+
+  _id( $merged_node, $merged_node);
+
   # Merge the counts of on the arches.
   my $reads1 = _reads( $node1 );
   my $reads2 = _reads( $merged_node );
@@ -322,42 +235,46 @@ sub _merge_nodes {
   foreach my $read ( keys %$reads1 ) {
 #    print STDERR Dumper($graph{ $node1 }{'OUT'}{$node2}{$read});
 #    print STDERR Dumper($graph{ $node1 }{'OUT'}{$read});
-    $graph{ $merged_node }{'READS'}{$read} ||= 0;
+    $$reads2{$read} ||= 0;
 #    print STDERR " $read   $graph{ $merged_node }{'READS'}{$read} += $graph{ $node1 }{'READS'}{$read};\n";
-    $graph{ $merged_node }{'READS'}{$read}   += $graph{ $node1 }{'READS'}{ $read };
+    $$reads2{$read} += $$reads1{ $read };
   }
 
-  %{$graph{ $merged_node }{'IN'}} = %{$graph{ $node1 }{'IN'}} if ($graph{ $node1 }{'IN'});
+  _reads($merged_node, $reads2);
 
-#      print "---- PRE ----\n";
+  # Move the incoming connections pointing to node1 onto the merged node
+  _in( $merged_node, $graph{$node1}[ $IN ]);
+
+  print "---- PRE [$merged_node] ----\n" if ( $verbose_function );
       
-  # rename all the Incomming connections from the upstream node
-  foreach my $pre ( keys %{$graph{ $merged_node }{'IN'} }) {
+  # rename all the outgoing connections from the upstream node
+  foreach my $pre ( _in( $merged_node )) {
 
-    if ( ! $graph{$pre}) {
-      print  "PRE :: $pre does not exist!\n";
+    if ( ! $graph{ $pre }) {
+      print STDERR "PRE :: $pre does not exist!\n";
       next;
     }
-#	print_node( $pre );
-    $graph{ $pre }{ 'OUT' }{ $merged_node } = $graph{ $pre }{ 'OUT' }{ $node1 };
-    delete($graph{ $pre }{ 'OUT' }{ $node1 });
-#	print_node( $pre );
+    
+    print_node( $pre ) if ( $verbose_function );
+    $graph{ $pre }[ $OUT ]{ $merged_node } = $graph{ $pre }[ $OUT ]{ $node1 };
+    delete($graph{ $pre }[ $OUT ]{ $node1 });
+    print_node( $pre ) if ( $verbose_function );
     
   }
   
-#      print "---- POST ----\n";
-  # rename all the Incomming connections from the upstream node
-  foreach my $post ( keys %{$graph{ $merged_node }{'OUT'} }) {
+  print "\n---- POST  [$merged_node ]----\n" if ( $verbose_function );
+  # rename all the incoming connections from the upstream node
+  foreach my $post ( _out( $merged_node )) {
     
     if ( ! $graph{$post}) {
-      print STDERR "POST :: $post does not exist!\n";
+      print STDERR  "POST :: $post does not exist!\n";
       next;
     }
     
-#	print_node( $post );
-    $graph{ $post }{ 'IN' }{ $merged_node } = $graph{ $post }{ 'IN' }{ $node2 };
-    delete($graph{ $post }{ 'IN' }{ $node2 });
-#	print_node( $post );
+    print_node( $post ) if ( $verbose_function );
+    $graph{ $post }[ $IN ]{ $merged_node } = $graph{ $post }[ $IN ]{ $node2 };
+    delete($graph{ $post }[ $IN ]{ $node2 });
+    print_node( $post ) if ( $verbose_function );
     
   }
   
@@ -365,7 +282,10 @@ sub _merge_nodes {
   delete( $graph{ $node2 });      
 
 #      print "----\n";
-#  print_node( $merged_node );
+  if ( $verbose_function ) {
+    print "\n";
+    print_node( $merged_node );
+  }
 #  print STDERR Dumper ($graph{$merged_node});
 #      print "-------\n\n";
       
@@ -403,9 +323,8 @@ sub print_tab {
   
   foreach my $node ( keys %graph ) {  
 
-    foreach my $edge (keys %{$graph{ $node }{'OUT'}} ) {
-#      print join("\t", $node, $edge, int(keys %{$graph{$node}{'OUT'}{$edge}}), "\n");
-      print join("\t", $node, $edge, join("-", keys %{$graph{$node}{'OUT'}{$edge}}), "\n");
+    foreach my $edge ( _out( $node )) {
+      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, "\n");
   }
 }
 
@@ -421,22 +340,27 @@ sub print_tab {
 # Kim Brugger (14 Oct 2011)
 sub print_node {
   my ($key) = @_;
-
-  if ( ! $graph{ $key }{ 'IN'} && !$graph{ $key }{ 'OUT'}) {
-    print STDERR "$key does not exist\n";
+#  return;
+  if ( ! _id( $key )) {
+    print  "$key does not exist\n";
     return;
   }
 
-  if ( ! $graph{ $key }{ 'IN'}) {
-    print STDERR "$key does not have any in coming arc\n";
-    return;
+  if ( ! _in( $key)) {
+    print  "$key does not have any incoming arc\n";
+#    return;
   }
-  if ( ! $graph{ $key }{ 'OUT'}) {
-    print STDERR "$key does not have any out going arc\n";
-    return;
+  if ( ! _out( $key )) {
+    print  "$key does not have any outgoing arc\n";
+#    return;
   }
 
-  print STDERR join(" ", keys %{$graph{ $key }{ 'IN'}}) . " --> $key --> " . join(" ", keys %{$graph{ $key }{ 'OUT'}}) . "\n" if ($graph{ $key }{ 'OUT'});
+#  print  join(" ", _in( $key )) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", _out( $key )) . "\n";
+  print  join(" ", _in( $key )) . " --> $key --> " . join(" ", _out( $key )) . "\n";
+
+#  print STDERR join(" ", keys %{$graph{ $key }[ $IN ]}) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", keys %{$graph{ $key }[ $OUT ]}) . "\n";
+
+#  print STDERR join(" ", keys %{$graph{ $key }[ $IN ]}) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", keys %{$graph{ $key }[ $OUT ]}) . "\n";
 
 }
 
@@ -549,14 +473,14 @@ sub add_sequence {
     if ( $prev_node ) {
 #      print "$prev_node $new_node --> $$kmer_counts{ $new_node } $reads\n";
 
-      $graph{ $prev_node }[$READS]{ $name }++;
-      $graph{ $prev_node }[$ID   ] = $prev_node;
+      $graph{ $prev_node }[ $READS ]{ $name }++;
+      $graph{ $prev_node }[ $ID    ] = $prev_node;
 
-      $graph{ $new_node }[$READS]{ $name }++;
-      $graph{ $new_node }[$ID   ] = $kmer;
+      $graph{ $new_node  }[ $READS ]{ $name }++;
+      $graph{ $new_node  }[ $ID    ] = $kmer;
 
-      $graph{ $new_node  }[ $IN  ]{ $prev_node}++;
-      $graph{ $prev_node }[ $OUT ]{ $new_node }++;
+      $graph{ $new_node  }[ $IN    ]{ $prev_node}++;
+      $graph{ $prev_node }[ $OUT   ]{ $new_node }++;
     }
     $prev_node = $new_node;
 
@@ -613,7 +537,7 @@ sub find_accessible_nodes {
 
   my @nodes =( $node );
   
-  foreach my $out_node ( keys %{$graph{$node}{'OUT'}} ) {
+  foreach my $out_node ( _out( $node ) ) {
     push @nodes, find_accessible_nodes( $out_node );
   }
 
@@ -642,7 +566,7 @@ sub drop_orphans {
   print "Dropping " . (keys %nodes) . " orphans \n";
 
   foreach my $node ( keys %nodes ) {
-    _delete_node($graph{ $node });
+    _delete_node($node);
   }
   
 
@@ -657,12 +581,12 @@ sub drop_orphans {
 sub _delete_node {
   my ( $node ) = @_;
 
-  foreach my $in (keys %{$graph{ $node }{ 'IN' }} ) {
-    delete ($graph{$in}{'OUT'}{ $node});
+  foreach my $in ( _in( $node ) ) {
+    delete ($graph{$in}[$OUT]{ $node });
   }
 
-  foreach my $out (keys %{$graph{ $node }{ 'OUT' }} ) {
-    delete ($graph{$out}{'IN'}{ $node});
+  foreach my $out ( _out( $node )) {
+    delete ($graph{ $out }[ $IN ]{ $node });
   }
 
   delete( $graph{$node} );
@@ -770,3 +694,100 @@ sub _path_finder {
 
 
 1;
+
+
+
+__END__
+
+
+# 
+# 
+# 
+# Kim Brugger (14 Oct 2011)
+sub merge_singletons_old {
+
+  my $merged_nodes = 0;
+
+# Remove edges only supported by a few reads
+  my %handled = ('E' => 1);
+ 
+  foreach my $node ( keys %graph ) {
+    
+    next if ( $handled{ $node } );
+
+    # there is only one arch out from this node.
+    if ( keys %{$graph{ $node }{'OUT'} } == 1) {
+      my $edge  = (keys %{$graph{ $node }{'OUT'}})[0];
+      # The next node has more than one incoming arch
+
+
+      next if ( keys %{$graph{ $edge }{'IN'}} > 1);
+
+      next if ( $handled{ $edge });
+
+      # Calculate the new key
+      my $merged_node = $node . substr($edge, $kmer - 1 );
+
+      if ( $graph{ $merged_node } ) {
+	print "$merged_node already exists\n";
+	next;
+      }
+
+#      print "$node  +  $edge -->  $merged_node\n";
+#      print_node( $node );
+#      print_node( $edge );
+
+      # create the new node with the new key
+      $graph{ $merged_node } = $graph{ $edge };
+      %{$graph{ $merged_node }{'IN'}} = %{$graph{ $node }{'IN'}} if ($graph{ $node }{'IN'});
+
+#      print "---- PRE ----\n";
+      
+      # rename all the Incomming connections from the upstream node
+      foreach my $pre ( keys %{$graph{ $merged_node }{'IN'} }) {
+
+	if ( ! $graph{$pre}) {
+	  print STDERR "PRE :: $pre does not exist!\n";
+	  next;
+	}
+#	print_node( $pre );
+	$graph{ $pre }{ 'OUT' }{ $merged_node } = $graph{ $pre }{ 'OUT' }{ $node };
+	delete($graph{ $pre }{ 'OUT' }{ $node });
+#	print_node( $pre );
+	
+      }
+
+#      print "---- POST ----\n";
+      # rename all the Incomming connections from the upstream node
+      foreach my $post ( keys %{$graph{ $merged_node }{'OUT'} }) {
+
+	if ( ! $graph{$post}) {
+	  print  "POST :: $post does not exist!\n";
+	  next;
+	}
+
+#	print_node( $post );
+	$graph{ $post }{ 'IN' }{ $merged_node } = $graph{ $post }{ 'IN' }{ $edge };
+	delete($graph{ $post }{ 'IN' }{ $edge });
+#	print_node( $post );
+	
+      }
+      
+      delete( $graph{ $node });
+      delete( $graph{ $edge });      
+
+#      print "----\n";
+#      print_node( $merged_node );
+#      print "-------\n\n";
+      
+
+      $handled{ $node }++;
+      $handled{ $edge }++;
+      $merged_nodes++;
+    }
+  }
+
+#  print Dumper( \%graph );
+  
+  return $merged_nodes;
+} 
