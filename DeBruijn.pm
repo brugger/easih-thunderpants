@@ -13,6 +13,7 @@ use Data::Dumper;
 my %graph;
 
 my $kmer = 27;
+my $build_reads = 0;
 
 my $EXIT_COUNTER = 20;
 
@@ -63,7 +64,7 @@ sub merge_singletons {
 
 #  dump_graph();
 # Remove edges only supported by a few reads
-  my %handled;
+  my %handled = ('S' => 1);
  
   foreach my $node ( keys %graph ) {
     
@@ -298,18 +299,23 @@ sub _merge_nodes {
 # 
 # Kim Brugger (14 Oct 2011)
 sub delete_low_weight {
+  my ( $cutoff ) = @_;
   # Remove edges only supported by a few reads
-  foreach my $sub_seq ( keys %graph ) {
-    foreach my $edge (keys %{$graph{ $sub_seq }{'OUT'} } ) {
-      
-      if ( keys %{$graph{ $sub_seq }{'OUT'}{ $edge }} <= 10) {
-	delete($graph{ $sub_seq }{'OUT'}{ $edge });
-      }
+
+  $cutoff ||= 0.1*$build_reads;
+
+
+  my $purged = 0;
+  foreach my $node ( keys %graph ) {
+    my $reads = keys %{_reads( $node )};
+    if ( $reads <= $cutoff ) {
+      _delete_node( $node );
+      $purged++;
     }
-    
-    delete( $graph{ $sub_seq } ) if ( keys %{$graph{ $sub_seq } } == 0 );
-    
   }
+
+  print STDERR "Removed $purged nodes with a $cutoff (total reads: $build_reads)\n";
+  drop_orphans();
 
 }
 
@@ -322,14 +328,10 @@ sub delete_low_weight {
 sub print_tab {
   
   foreach my $node ( keys %graph ) {  
-
     foreach my $edge ( _out( $node )) {
       print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, "\n");
+    }
   }
-}
-
-
-
 }
 
 
@@ -355,12 +357,8 @@ sub print_node {
 #    return;
   }
 
-#  print  join(" ", _in( $key )) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", _out( $key )) . "\n";
   print  join(" ", _in( $key )) . " --> $key --> " . join(" ", _out( $key )) . "\n";
 
-#  print STDERR join(" ", keys %{$graph{ $key }[ $IN ]}) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", keys %{$graph{ $key }[ $OUT ]}) . "\n";
-
-#  print STDERR join(" ", keys %{$graph{ $key }[ $IN ]}) . " --> $key/$graph{ $key }[ $ID ] --> " . join(" ", keys %{$graph{ $key }[ $OUT ]}) . "\n";
 
 }
 
@@ -422,7 +420,7 @@ sub count_kmers {
 sub readin_file {
   my ($filename) = @_;
   
-  my ($reads, $kmer_counts) = count_kmers( $filename );
+  my ($reads, $kmer_counts);# = count_kmers( $filename );
 
   my ($name, $seq) = (1);
   my $exit_counter = $EXIT_COUNTER;
@@ -457,7 +455,8 @@ sub add_sequence {
   my ($name, $seq, $kmer_counts, $reads) = @_;
 
 #  print "$seq\n";
-  
+
+  $build_reads++;
   my $prev_node = "S";
 
   for( my $i = 0; $i<length($seq) - $kmer; $i++) {
@@ -486,44 +485,6 @@ sub add_sequence {
 
   }
 }
-
-
-# 
-# 
-# 
-# Kim Brugger (06 Oct 2011)
-sub add_sequence_old {
-  my ($name, $seq, $kmer_counts, $reads) = @_;
-
-#  print "$seq\n";
-  
-  my $prev_node = "S";
-
-  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
-    my $new_node = substr( $seq, $i, $kmer);
-
-
-    if ( $kmer_counts && $reads && 
-	 $$kmer_counts{ $new_node } < $reads*0.1 ){
-      $prev_node = undef;
-      next;
-    }
-	  
-    if ( $prev_node ) {
-#      print "$prev_node $new_node --> $$kmer_counts{ $new_node } $reads\n";
-
-      $graph{ $new_node }{'READS'}{ $name }++;
-      $graph{ $new_node }{'ID'   } = $kmer;
-
-      $graph{ $prev_node }{'OUT' }{ $new_node  }{$name}++;
-      $graph{ $new_node }{ 'IN'  }{ $prev_node }{$name}++;
-    }
-    $prev_node = $new_node;
-
-  }
-}
-
-
 
 
 # 
@@ -563,7 +524,7 @@ sub drop_orphans {
     delete($nodes{ $node});
   }
 
-  print "Dropping " . (keys %nodes) . " orphans \n";
+  print STDERR "Dropping " . (keys %nodes) . " orphans \n";
 
   foreach my $node ( keys %nodes ) {
     _delete_node($node);
@@ -791,3 +752,43 @@ sub merge_singletons_old {
   
   return $merged_nodes;
 } 
+
+
+
+
+# 
+# 
+# 
+# Kim Brugger (06 Oct 2011)
+sub add_sequence_old {
+  my ($name, $seq, $kmer_counts, $reads) = @_;
+
+#  print "$seq\n";
+  
+  my $prev_node = "S";
+
+  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
+    my $new_node = substr( $seq, $i, $kmer);
+
+
+    if ( $kmer_counts && $reads && 
+	 $$kmer_counts{ $new_node } < $reads*0.1 ){
+      $prev_node = undef;
+      next;
+    }
+	  
+    if ( $prev_node ) {
+#      print "$prev_node $new_node --> $$kmer_counts{ $new_node } $reads\n";
+
+      $graph{ $new_node }{'READS'}{ $name }++;
+      $graph{ $new_node }{'ID'   } = $kmer;
+
+      $graph{ $prev_node }{'OUT' }{ $new_node  }{$name}++;
+      $graph{ $new_node }{ 'IN'  }{ $prev_node }{$name}++;
+    }
+    $prev_node = $new_node;
+
+  }
+}
+
+
