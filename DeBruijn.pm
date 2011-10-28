@@ -8,19 +8,23 @@ package DeBruijn;
 use strict;
 use warnings;
 use Data::Dumper;
-
+no warnings "recursion";
 
 my %graph;
 
 my $kmer = 27;
 my $build_reads = 0;
 
-my $EXIT_COUNTER = 20;
+my $EXIT_COUNTER = -2000;
 
 my $ID    = 0;
 my $READS = 1;
 my $IN    = 2;
 my $OUT   = 3;
+
+my $REVERSE = 1;
+
+my $infile = "";
 
 # 
 # 
@@ -136,6 +140,7 @@ sub _reads {
     $graph{ $node }[ $READS ] = $reads;
   }
        
+
   return  \%{$graph{ $node }[ $READS ]};
 }
 
@@ -302,7 +307,7 @@ sub delete_low_weight {
   my ( $cutoff ) = @_;
   # Remove edges only supported by a few reads
 
-  $cutoff ||= 0.1*$build_reads;
+  $cutoff ||= 0.10*$build_reads;
 
 
   my $purged = 0;
@@ -314,7 +319,7 @@ sub delete_low_weight {
     }
   }
 
-  print STDERR "Removed $purged nodes with a $cutoff (total reads: $build_reads)\n";
+  print STDERR "Removed $purged nodes with a $cutoff depth cutoff (total reads: $build_reads)\n";
   drop_orphans();
 
 }
@@ -329,7 +334,8 @@ sub print_tab {
   
   foreach my $node ( keys %graph ) {  
     foreach my $edge ( _out( $node )) {
-      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, "\n");
+#      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, join("-", sort {$a <=> $b} keys %{_reads($edge)}),"\n");
+      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, int(keys %{_reads($node)}),int(keys %{_reads($edge)}),"\n");
     }
   }
 }
@@ -384,7 +390,7 @@ sub count_kmers {
     chomp;
 
     if ( /\>/  ) {
-      if ( $seq && length($seq) > 90) {
+      if ( $seq && length($seq) > 80) {
 	for( my $i = 0; $i<length($seq) - $kmer; $i++) {
 	  my $kmer = substr( $seq, $i, $kmer);
 	  $kmer_counts{ $kmer }++;
@@ -419,22 +425,26 @@ sub count_kmers {
 # Kim Brugger (17 Oct 2011)
 sub readin_file {
   my ($filename) = @_;
+
+  $REVERSE = 1 if ($filename =~ /R/);
   
   my ($reads, $kmer_counts);# = count_kmers( $filename );
 
   my ($name, $seq) = (1);
   my $exit_counter = $EXIT_COUNTER;
 
+  $infile = $filename;
+
   open( my $in, $filename) || die "Could not open '$filename': $!\n";
   while(<$in>) {
     chomp;
 
     if ( /\>/  ) {
-      if ( $seq && length($seq) > 90) {
+      if ( $seq && length($seq) > 80) {
 #      print "$name\n";
 	DeBruijn::add_sequence( $name, $seq, $kmer_counts, $reads );
-	last if ( $exit_counter-- == 0 );
  	$seq = "";
+	last if ( $exit_counter-- == 0 );
       }
       $name++;
     }
@@ -447,12 +457,47 @@ sub readin_file {
 #  print Dumper( \%graph);
 }
 
+
+
+# 
+# 
+# 
+# Kim Brugger (19 Oct 2011)
+sub cyclic_sequence {
+  my ( $seq ) = @_;
+
+  my %kmers;
+  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
+    my $node = substr( $seq, $i, $kmer);
+    
+    $kmers{ $node }++;
+#    print "repeated sequence: $node \n" if ( $kmers{ $node } > 1);
+    
+    if ( $kmers{ $node } > 1) {
+#      $seq =~ s/(.*?$node.*?)$node.*/$1/;
+#      print "Cleaned sequence: $seq\n";
+      return 1;
+    }
+  }
+  return 0;
+}
+
+
 # 
 # 
 # 
 # Kim Brugger (06 Oct 2011)
 sub add_sequence {
   my ($name, $seq, $kmer_counts, $reads) = @_;
+
+  $seq = reverse($seq) if ($REVERSE);
+  
+#  print "$name\t$seq\n";
+
+  if ( cyclic_sequence( $seq ) ) {
+#    print  "Ignoring cyclic sequence ($name, $seq)\n";
+    return;
+  }
 
 #  print "$seq\n";
 
@@ -564,6 +609,198 @@ sub _delete_node {
 sub path_finder {
 
 
+  my $start = 'S';
+
+
+#  print "start paths: ". join(" ", keys %{$graph{'S'}{'OUT'}}) . "\n";
+
+#  print Dumper(\%graph);
+
+  foreach my $start_pos ( _out( 'S' )) {
+#    next if ( $start_pos ne "CACGCTTCTTGGAGTACTCTACGTCTGAGTG");
+#    print "S '$start_pos'\n";
+    my @post_poss = _out( $start_pos );
+    my $start_reads = _reads( $start_pos );
+#    print Dumper( $start_reads );
+    foreach my $post_pos ( @post_poss ) {
+
+#      print "S $start_pos $post_pos\n";
+      my $post_reads = _reads( $post_pos );
+#      print Dumper( $post_reads );
+
+      my %shared_reads;
+      foreach my $read ( keys %$start_reads ) {
+	if ( $$start_reads{ $read }) {
+#	  print "SHARED READ S:: $start_pos -- $post_pos $read :: \n";
+	  $shared_reads{ $read } = ($$start_reads{ $read } || 0) + ($$post_reads{ $read } || 0);
+	}
+      }
+
+
+      if ( keys %shared_reads ) {
+	_path_finder($start_pos.substr($post_pos, $kmer -1), $post_pos, \%shared_reads);
+      }
+    }
+  }
+}
+
+
+
+# 
+# 
+# 
+# Kim Brugger (07 Oct 2011)
+sub _path_finder {
+  my ($pre_path, $pos, $prev_shared_reads) = @_;
+
+#  print "PREV " . Dumper( $prev_shared_reads );
+
+#  print "$pre_path -- $pos\n";
+
+
+  my @post_poss = _out( $pos );
+  if (! @post_poss ) {
+    my $weight = 1;#keys %$legacy;
+    $pre_path = reverse($pre_path) if ($REVERSE);
+
+    print ">$infile\n$pre_path\n" if ( length($pre_path) > 90);
+#    print "PATH :: $pre_path\t$weight\n" if ( length($pre_path) > 90);
+#    print "PATH :: $pre_path\t$weight\n" ;
+    return;
+  }
+
+
+
+  my %shared_reads;
+
+  foreach my $post_pos ( @post_poss ) {
+#    print "Trying to connect $pos with $post_pos\n";
+
+    my $post_reads = _reads( $post_pos );
+#    print Dumper( $post_reads );
+
+    foreach my $read ( keys %$post_reads ) {
+
+      if ( $$prev_shared_reads{ $read }) {
+#	print "SHARED READ S:: $pos -- $post_pos $read :: \n";
+	$shared_reads{ $post_pos}{$read } = ($$prev_shared_reads{$read} || 0) + $$post_reads{$read};
+      }
+    }
+  }
+  
+ 
+#  print Dumper( \%shared_reads );
+ 
+  if ( keys %shared_reads > 1) {
+    
+    my %ratings;
+    foreach my $outgoing ( keys %shared_reads ) {
+      foreach my $read ( keys %{$shared_reads{ $outgoing }} ) {
+	$ratings{$outgoing} += $shared_reads{ $outgoing }{ $read };
+      }
+    }
+    
+#    print Dumper(\%ratings);
+
+    my $outgoing = (sort { $ratings{$b} <=> $ratings{$a}} keys %ratings)[0];
+#    print "Picked $outgoing\n";
+    my $out_reads = _reads( $outgoing );
+    
+    foreach my $read ( keys %$out_reads ) {
+      $$prev_shared_reads{ $read } ||= 0;
+      $$prev_shared_reads{ $read } += $$out_reads{$read};
+    }
+    _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads );
+
+    ;
+  }
+  elsif ( keys %shared_reads == 1) {
+#    return;
+    my $outgoing = (keys %shared_reads)[0];
+    my $out_reads = _reads( $outgoing );
+    
+    foreach my $read ( keys %$out_reads ) {
+      $$prev_shared_reads{ $read } ||= 0;
+      $$prev_shared_reads{ $read } += $$out_reads{ $read };
+    }
+    _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads );
+  }
+  else {
+    print Dumper( \%shared_reads );
+    print "No shared reads from $pos onwards\n";
+  }
+  
+}
+
+
+
+
+
+# 
+# 
+# 
+# Kim Brugger (07 Oct 2011)
+sub _path_finder_old {
+  my ($pre_path, $pos, $legacy) = @_;
+
+#  die Dumper( $legacy );
+
+#  print "$pre_path -- $pos\n";
+
+
+  my @post_poss = keys %{$graph{$pos}{'OUT'}};
+#  if (! @post_poss  || @post_poss > 1) {
+  if (! @post_poss ) {
+    my $weight = keys %$legacy;
+#    print "PATH :: $pre_path\t$weight\n" if ( length($pre_path) > 90);
+    print "PATH :: $pre_path\t$weight\n" ;
+    return;
+  }
+
+  foreach my $post_pos ( @post_poss ) {
+
+    print "Trying to connect with $post_pos\n";
+    my $shared_read = 0;
+    foreach my $read ( keys %{$graph{ $pos }{'OUT'}{$post_pos}} ) {
+      if ( $$legacy{$read}) {
+	  print "SHARED READ :: $pos -- $post_pos $read :: \n";
+#	  print "[$graph{ $pos }{'OUT'}{$post_pos}{$read} --";
+#	  print "$$legacy{$read}]\n";
+	$shared_read++;
+	last;
+      }
+    }
+    
+    if ( $shared_read ) {
+#      my %new_legacy = (%{$graph{ 'S' }{'OUT'}{$start_pos}}, %{$graph{ $start_pos }{'OUT'}{$post_pos}});
+      my %new_legacy = (%{$graph{ $pos }{'OUT'}{$post_pos}}, %$legacy);
+      _path_finder ($pre_path .substr($post_pos, $kmer -1), $post_pos, \%new_legacy );
+    }
+    else {
+      print "Dropping path $pos $post_pos\n";
+    }
+  }
+  
+  
+}
+
+
+
+1;
+
+
+
+__END__
+
+
+
+# 
+# 
+# 
+# Kim Brugger (07 Oct 2011)
+sub path_finder {
+
+
   my $pos = 'S';
 
 
@@ -652,13 +889,6 @@ sub _path_finder {
   
 }
 
-
-
-1;
-
-
-
-__END__
 
 
 # 

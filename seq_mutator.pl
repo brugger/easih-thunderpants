@@ -25,7 +25,7 @@ sub mutate_sequence {
   my ($sequence, $count) = @_;
   
   
-  $count ||= 1001;
+  $count ||= 2001;
   my $prefix ||= int(rand(100));
   
   while( $count-- > 0 ) {

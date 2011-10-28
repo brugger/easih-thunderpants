@@ -12,6 +12,8 @@ use Data::Dumper;
 no warnings "recursion";
 
 use lib './';
+use lib '../';
+use lib '../../';
 use DeBruijn;
 
 
@@ -58,7 +60,6 @@ DeBruijn::delete_low_weight();
 DeBruijn::drop_orphans();
 
 
-#DeBruijn::dump_graph();
 
 #DeBruijn::delete_low_weight();
 #DeBruijn::merge_singletons();
@@ -76,7 +77,8 @@ DeBruijn::drop_orphans();
 
 
 DeBruijn::print_tab();
-#DeBruijn::path_finder();
+DeBruijn::path_finder();
+#DeBruijn::dump_graph();
 
 
 
