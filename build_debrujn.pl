@@ -71,15 +71,15 @@ while (DeBruijn::merge_singletons() ) {
 print STDERR "Done simplifying graph, ".DeBruijn::count_nodes()." nodes left\n";
 DeBruijn::drop_orphans();
 
+#DeBruijn::collapse_start_frags();
 
 
 #DeBruijn::_merge_nodes('TTTCTTGGAGTACTCTACGTCTGAGTG', 'CACATTTCTTGGAGTACTCTACGTCTGAGT');
 
 
-DeBruijn::print_tab();
+#DeBruijn::print_tab();
 DeBruijn::path_finder();
 #DeBruijn::dump_graph();
-
 
 
 foreach my $start ( keys %graph ) {  
