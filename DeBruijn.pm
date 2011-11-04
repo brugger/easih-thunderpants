@@ -16,7 +16,7 @@ my $kmer = 12;
 my $build_reads = 0;
 
 my $MIN_RATIO = 0.10;
-
+my $MIN_PATH_RATIO = 0.25;
 my $EXIT_COUNTER = -4000;
 
 my $ID    = 0;
@@ -26,8 +26,8 @@ my $OUT   = 3;
 
 my $REVERSE = 0;
 
-my $FRAG_MIN = 90;
-my $FRAG_MAX = 129;
+my $FRAG_MIN = 115;
+my $FRAG_MAX = 117;
 
 
 my $infile = "";
@@ -424,7 +424,7 @@ sub print_tab {
   
   foreach my $node ( keys %graph ) {  
     foreach my $edge ( _out( $node )) {
-      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, join("-", sort {$a <=> $b} keys %{_reads($node)}),"\n");
+      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{ $edge }, join("-", (sort {$a <=> $b} keys %{_reads($edge)})[0..3]),int(keys %{_reads($edge)}),"\n");
 #      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, int(keys %{_reads($node)}),int(keys %{_reads($edge)}),"\n");
     }
   }
@@ -516,7 +516,7 @@ sub count_kmers {
 sub readin_file {
   my ($filename) = @_;
 
-#  $REVERSE = 1 if ($filename =~ /R/);
+  $REVERSE = 1 if ($filename =~ /R/);
   
   my ($reads, $kmer_counts);# = count_kmers( $filename );
 
@@ -621,7 +621,7 @@ sub add_sequence {
 
   $multipliers{ $seq }++;
 
-  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
+  for( my $i = 0; $i<length($seq) - $kmer+1; $i++) {
     my $new_node = substr( $seq, $i, $kmer);
 
 
@@ -750,16 +750,17 @@ sub path_finder {
       my $post_reads = _reads( $post_pos );
 #      print Dumper( $post_reads );
 
-      my %shared_reads;
+      my %shared_reads = ();
+
       foreach my $read ( keys %$post_reads ) {
 	if ( $$start_reads{ $read }) {
 #	  print "SHARED READ S:: $start_pos -- $post_pos $read :: \n";
-	  $shared_reads{ $read } = ($$start_reads{ $read } || 0) + ($$post_reads{ $read } || 0);
+	  $shared_reads{ $read }++;# = $$start_reads{ $read } + $$post_reads{ $read };
 	}
       }
 
       if ( keys %shared_reads ) {
-	_path_finder($start_pos.substr($post_pos, $kmer -1), $post_pos, \%shared_reads);
+	_path_finder($start_pos.substr($post_pos, $kmer -1), $post_pos, \%shared_reads, int(keys %shared_reads) );
       }
     }
   }
@@ -772,23 +773,27 @@ sub path_finder {
 # 
 # Kim Brugger (07 Oct 2011)
 sub _path_finder {
-  my ($pre_path, $pos, $prev_shared_reads) = @_;
+  my ($pre_path, $pos, $prev_shared_reads, $initial_weight) = @_;
+
+  $initial_weight = keys %$prev_shared_reads;
+
+  my $verbose_function = 0;
 
 #  print "PREV " . Dumper( $prev_shared_reads );
+  print "$pre_path\n" if ($verbose_function);
+  print "PREV " . join("-", (sort{$a<=>$b}keys %$prev_shared_reads)[0..5]). " [$initial_weight]\n" if ($verbose_function);
+  print "PREV " . (keys %$prev_shared_reads). " [$initial_weight]\n" if ($verbose_function);
 
 #  print "$pre_path -- $pos\n";
-
 
   my @post_poss = _out( $pos );
   if (! @post_poss ) {
     my $weight = 1;#keys %$legacy;
-    $pre_path = reverse($pre_path) if ($REVERSE);
+    $pre_path = reverse($pre_path) if ( $REVERSE);
 
     print ">$infile\n$pre_path\n" if ( length($pre_path) >= $FRAG_MIN );
     return;
   }
-
-
 
   my %shared_reads;
 
@@ -797,11 +802,12 @@ sub _path_finder {
 
     my $post_reads = _reads( $post_pos );
 #    print Dumper( $post_reads );
-
+    print "POST " . join("-", (sort{$a<=>$b}keys %$post_reads)[0..5]). " $post_pos\n" if ($verbose_function);
     foreach my $read ( keys %$post_reads ) {
       if ( $$prev_shared_reads{ $read }) {
 #	print "SHARED READ S:: $pos -- $post_pos $read :: \n";
-	$shared_reads{ $post_pos}{$read } = $$prev_shared_reads{$read} + $$post_reads{$read};
+#	$shared_reads{ $post_pos}{$read } = $$prev_shared_reads{$read} + $$post_reads{$read};
+	$shared_reads{ $post_pos}{$read }++;
       }
     }
   }
@@ -814,23 +820,30 @@ sub _path_finder {
     my %ratings;
     foreach my $outgoing ( keys %shared_reads ) {
       foreach my $read ( keys %{$shared_reads{ $outgoing }} ) {
-	$ratings{$outgoing} += $shared_reads{ $outgoing }{ $read };
+	$ratings{$outgoing} ++;#= $shared_reads{ $outgoing }{ $read };
       }
     }
     
-    print Dumper(\%ratings);
+    print Dumper(\%ratings) if ($verbose_function);
 
-    my $outgoing = (sort { $ratings{$b} <=> $ratings{$a}} keys %ratings)[0];
-    print "Picked $outgoing\n";
-    my $out_reads = _reads( $outgoing );
-    
-    foreach my $read ( keys %$out_reads ) {
+    foreach my $outgoing (sort { $ratings{$b} <=> $ratings{$a}} keys %ratings ) {
+      print "WEIGHT :: $ratings{ $outgoing } <= ".($MIN_RATIO*$initial_weight)." [$initial_weight]\n" if ($verbose_function);
+#      last if ($ratings{ $outgoing } <= $MIN_RATIO*$initial_weight);
+      last if ($ratings{ $outgoing } <= $MIN_PATH_RATIO*$initial_weight);
+#      last if ($ratings{ $outgoing } <= $MIN_RATIO*$build_reads);
+#      print "Picked $outgoing\n";
+      my $out_reads = _reads( $outgoing );
+
+#      my %new_shared_reads = %$prev_shared_reads;
+      my %new_shared_reads;
+      foreach my $read ( keys %$out_reads ) {
 #      $$prev_shared_reads{ $read } ||= 0;
 #      $$prev_shared_reads{ $read } += $$out_reads{$read};
-      $$prev_shared_reads{ $read } += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
+	$new_shared_reads{ $read }  += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
+#	$$prev_shared_reads{ $read } += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
+      }
+      _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, \%new_shared_reads, $initial_weight );
     }
-    _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads );
-
     ;
   }
   elsif ( keys %shared_reads == 1) {
@@ -840,10 +853,10 @@ sub _path_finder {
     my $out_reads = _reads( $outgoing );
 
     foreach my $read ( keys %$out_reads ) {
-      $$prev_shared_reads{ $read } ||= 0;
+#      $$prev_shared_reads{ $read } ||= 0;
       $$prev_shared_reads{ $read } += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
     }
-    _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads );
+    _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads, $initial_weight );
   }
   else {
     print Dumper( \%shared_reads );
