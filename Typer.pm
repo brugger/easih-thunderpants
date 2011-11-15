@@ -9,6 +9,7 @@ use strict;
 use warnings;
 use Data::Dumper;
 no warnings "recursion";
+use Storable;
 
 my $kmer = 12;
 my %kmers;
@@ -41,20 +42,38 @@ sub type_sequence {
   }
 
   #pull out the best hit,DNA first.
-  print "Seq splits into $steps DNA fragments.\n";
-  my @sorted_dna_types;
-  map { push @sorted_dna_types, [$_, $dna_hits{ $_}] } sort { $dna_hits{ $b } <=> $dna_hits{ $a } } keys %dna_hits;
-  print Dumper( @sorted_dna_types[0..10]);
-  print "Seq splits into $aa_steps AA fragments.\n";
-  my @sorted_aa_types;
-  map { push @sorted_aa_types, [$_, $aa_hits{ $_}] } sort { $aa_hits{ $b } <=> $aa_hits{ $a } } keys %aa_hits;
-  print Dumper( @sorted_aa_types[0..10]);
+  my (%weighted_dna_types, $dna_heaviest);
+  map { push @{$weighted_dna_types{$dna_hits{$_}}}, $_;
+	$dna_heaviest = $dna_hits{$_} if ( !$dna_heaviest || $dna_heaviest < $dna_hits{$_});
+  } sort keys %dna_hits;
 
-  my $dna_type = ( sort { $dna_hits{ $b } <=> $dna_hits{ $a } } keys %dna_hits)[0];
-  print "DNA type: $dna_type \n";
-  my  $aa_type = ( sort {  $aa_hits{ $b } <=>  $aa_hits{ $a } } keys  %aa_hits)[0];
-  print "AA  type: $aa_type \n";
+  my (%weighted_aa_types, $aa_heaviest);
+  map { push @{$weighted_aa_types{$aa_hits{$_}}}, $_;
+	$aa_heaviest = $aa_hits{$_} if ( !$aa_heaviest || $aa_heaviest < $aa_hits{$_});
+  } sort keys %aa_hits;
 
+#  my $dna_string = join(" ", @{$weighted_dna_types{ $dna_heaviest }});
+#  my $aa_string = join(" ", @{$weighted_aa_types{ $aa_heaviest }});
+
+#  return if ($dna_heaviest != $steps && $aa_heaviest != $aa_steps);
+  print "Seq splits into $steps/$aa_steps DNA/AA fragments. ($dna_heaviest/$aa_heaviest)\n";
+
+#  print "=== DNA & AA agrees ===\n" if ( $dna_string eq $aa_string);
+
+#  print substr($dna_string, 0, 20) . "\n" if ( $dna_string eq $aa_string);
+
+  return (100, $weighted_dna_types{ $dna_heaviest }) if ( $dna_heaviest == $steps);
+  return (99 , $weighted_aa_types{ $aa_heaviest })   if ( $aa_heaviest == $aa_steps);
+#  return ( 99, $weighted_dna_types{ $dna_heaviest }) if ( $dna_string eq $aa_string);
+
+  if ( $steps - $dna_heaviest > $aa_steps - $aa_heaviest) {
+    return (sprintf("%.2f", 100*$dna_heaviest/$steps), $weighted_aa_types{ $aa_heaviest });
+  }
+  else {
+#    return (sprintf("%.2f", 100*($aa_heaviest/$aa_steps)), $weighted_aa_types{ $aa_heaviest });
+  }
+
+  return (0, []);
 }
 
 
@@ -181,6 +200,39 @@ sub set_kmer {
 
   $kmer = $new_kmer;
 }
+
+
+
+
+
+
+# 
+# 
+# 
+# Kim Brugger (09 Nov 2011)
+sub dump_db {
+  my ($outfile) = @_;
+
+  die "Need an outfile to write the database to\n" if (! $outfile );
+
+  return Storable::store(\%kmers, $outfile);
+}
+
+
+
+# 
+# 
+# 
+# Kim Brugger (09 Nov 2011)
+sub readin_db {
+  my ($dbfile) = @_;
+
+  die "Need an dbfile to read from\n" if (!$dbfile);
+
+
+  %kmers = %{Storable::retrieve( $dbfile)};
+}
+
 
 
 # 

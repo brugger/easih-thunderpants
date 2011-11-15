@@ -12,12 +12,12 @@ no warnings "recursion";
 
 my %graph;
 
-my $kmer = 12;
+my $kmer = 21;
 my $build_reads = 0;
 
-my $MIN_RATIO = 0.10;
-my $MIN_PATH_RATIO = 0.25;
-my $EXIT_COUNTER = -4000;
+my $MIN_RATIO = 0.20;
+my $MIN_PATH_RATIO = 0.15;
+my $EXIT_COUNTER = 10000;
 
 my $ID    = 0;
 my $READS = 1;
@@ -26,8 +26,8 @@ my $OUT   = 3;
 
 my $REVERSE = 0;
 
-my $FRAG_MIN = 115;
-my $FRAG_MAX = 117;
+my $FRAG_MIN = 90;
+my $FRAG_MAX = 1004;
 
 
 my $infile = "";
@@ -411,9 +411,27 @@ sub delete_low_weight {
   print STDERR   " ".DeBruijn::count_nodes()." nodes left\n";
 
   print STDERR "Removed $purged nodes with a $cutoff depth cutoff (total reads: $build_reads)\n";
-  drop_orphans();
+#  drop_orphans();
 }
 
+
+
+
+# 
+# 
+# 
+# Kim Brugger (07 Nov 2011)
+sub shared_reads {
+  my ($node1, $node2) = @_;
+  
+  my %shared;
+  my $node1s = _reads($node1);
+  foreach my $read ( keys %{_reads($node2)}){
+    $shared{ $read } = $$node1s{ $read } if ( $$node1s{ $read });
+  }
+
+  return \%shared;
+}
 
 
 # 
@@ -424,7 +442,8 @@ sub print_tab {
   
   foreach my $node ( keys %graph ) {  
     foreach my $edge ( _out( $node )) {
-      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{ $edge }, join("-", (sort {$a <=> $b} keys %{_reads($edge)})[0..3]),int(keys %{_reads($edge)}),"\n");
+#      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{ $edge }, join("-", (sort {$a <=> $b} keys %{_reads($edge)})[0..3]),int(keys %{_reads($edge)}),"\n");
+      print join("\t", $node, $edge, int(keys %{shared_reads($node, $edge)}), int(keys %{_reads($node)}), int(keys %{_reads($edge)}), join("-", (sort {$a <=> $b} keys %{_reads($edge)})[0..5]),"\n");
 #      print join("\t", $node, $edge, $graph{$node}[ $OUT ]{$edge}, int(keys %{_reads($node)}),int(keys %{_reads($edge)}),"\n");
     }
   }
@@ -516,7 +535,7 @@ sub count_kmers {
 sub readin_file {
   my ($filename) = @_;
 
-  $REVERSE = 1 if ($filename =~ /R/);
+#  $REVERSE = 1 if ($filename =~ /R/);
   
   my ($reads, $kmer_counts);# = count_kmers( $filename );
 
@@ -768,6 +787,7 @@ sub path_finder {
 
 
 
+
 # 
 # 
 # 
@@ -775,14 +795,14 @@ sub path_finder {
 sub _path_finder {
   my ($pre_path, $pos, $prev_shared_reads, $initial_weight) = @_;
 
-  $initial_weight = keys %$prev_shared_reads;
+#  $initial_weight = keys %$prev_shared_reads;
 
   my $verbose_function = 0;
 
 #  print "PREV " . Dumper( $prev_shared_reads );
   print "$pre_path\n" if ($verbose_function);
   print "PREV " . join("-", (sort{$a<=>$b}keys %$prev_shared_reads)[0..5]). " [$initial_weight]\n" if ($verbose_function);
-  print "PREV " . (keys %$prev_shared_reads). " [$initial_weight]\n" if ($verbose_function);
+#  print "PREV " . (keys %$prev_shared_reads). " [$initial_weight]\n" if ($verbose_function);
 
 #  print "$pre_path -- $pos\n";
 
@@ -796,9 +816,11 @@ sub _path_finder {
   }
 
   my %shared_reads;
-
+  my %shared_reads_new;
   foreach my $post_pos ( @post_poss ) {
 #    print "Trying to connect $pos with $post_pos\n";
+
+    $shared_reads_new{ "$post_pos" } = int(keys %{shared_reads( $pos, $post_pos)});
 
     my $post_reads = _reads( $post_pos );
 #    print Dumper( $post_reads );
@@ -813,7 +835,7 @@ sub _path_finder {
   }
   
  
-#  print Dumper( \%shared_reads );
+  print Dumper( \%shared_reads_new ) if ($verbose_function);
  
   if ( keys %shared_reads > 1) {
     
@@ -828,9 +850,9 @@ sub _path_finder {
 
     foreach my $outgoing (sort { $ratings{$b} <=> $ratings{$a}} keys %ratings ) {
       print "WEIGHT :: $ratings{ $outgoing } <= ".($MIN_RATIO*$initial_weight)." [$initial_weight]\n" if ($verbose_function);
-#      last if ($ratings{ $outgoing } <= $MIN_RATIO*$initial_weight);
-      last if ($ratings{ $outgoing } <= $MIN_PATH_RATIO*$initial_weight);
-#      last if ($ratings{ $outgoing } <= $MIN_RATIO*$build_reads);
+      print "WEIGHT2 :: ".(100*$ratings{ $outgoing }/$shared_reads_new{ "$outgoing" })." [$ratings{ $outgoing } $shared_reads_new{ $outgoing} $outgoing]\n" if ($verbose_function);
+      next if ($ratings{ $outgoing } <= $MIN_PATH_RATIO*$initial_weight);
+      next if ($ratings{ $outgoing }/$shared_reads_new{ "$outgoing" } <= $MIN_PATH_RATIO);
 #      print "Picked $outgoing\n";
       my $out_reads = _reads( $outgoing );
 
@@ -842,7 +864,9 @@ sub _path_finder {
 	$new_shared_reads{ $read }  += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
 #	$$prev_shared_reads{ $read } += $$out_reads{ $read } if ( $$prev_shared_reads{ $read });
       }
-      _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, \%new_shared_reads, $initial_weight );
+
+      _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, $prev_shared_reads, $initial_weight );
+#      _path_finder ($pre_path .substr($outgoing, $kmer -1), $outgoing, \%new_shared_reads, $initial_weight );
     }
     ;
   }
@@ -871,234 +895,5 @@ sub _path_finder {
 
 
 __END__
-
-
-
-# 
-# 
-# 
-# Kim Brugger (07 Oct 2011)
-sub path_finder {
-
-
-  my $pos = 'S';
-
-
-#  print "start paths: ". join(" ", keys %{$graph{'S'}{'OUT'}}) . "\n";
-
-#  print Dumper(\%graph);
-
-  foreach my $start_pos ( keys %{$graph{'S'}{'OUT'}} ) {
-#    print "S $start_pos\n";
-    my @post_poss = keys %{$graph{$start_pos}{'OUT'}};
-    foreach my $post_pos ( @post_poss ) {
-
-#      print "S $start_pos $post_pos\n";
-      my $shared_read = 0;
-      foreach my $read ( keys %{$graph{ $start_pos }{'OUT'}{$post_pos}} ) {
-	if ( $graph{ $pos }{'OUT'}{$start_pos}{$read}) {
-	  print "SHARED READ S:: $start_pos -- $post_pos $read :: \n";
-#	  print "[$graph{ 'S' }{'OUT'}{$start_pos}{$read} --";
-#	  print "$graph{ $start_pos }{'OUT'}{$post_pos}{$read}]\n";
-	  $shared_read++;
-	  last;
-	}
-      }
-
-      if ($shared_read ) {
-	my %new_legacy = (%{$graph{ 'S' }{'OUT'}{$start_pos}}, %{$graph{ $start_pos }{'OUT'}{$post_pos}});
-	_path_finder($start_pos.substr($post_pos, $kmer -1), $post_pos, \%new_legacy);
-      }
-      else {
-	print "Dropping path $start_pos $post_pos\n";
-      }
-    }
-  }
-
- 
-}
-
-
-
-# 
-# 
-# 
-# Kim Brugger (07 Oct 2011)
-sub _path_finder {
-  my ($pre_path, $pos, $legacy) = @_;
-
-#  die Dumper( $legacy );
-
-#  print "$pre_path -- $pos\n";
-
-
-  my @post_poss = keys %{$graph{$pos}{'OUT'}};
-#  if (! @post_poss  || @post_poss > 1) {
-  if (! @post_poss ) {
-    my $weight = keys %$legacy;
-#    print "PATH :: $pre_path\t$weight\n" if ( length($pre_path) > 90);
-    print "PATH :: $pre_path\t$weight\n" ;
-    return;
-  }
-
-  foreach my $post_pos ( @post_poss ) {
-
-    print "Trying to connect with $post_pos\n";
-    my $shared_read = 0;
-    foreach my $read ( keys %{$graph{ $pos }{'OUT'}{$post_pos}} ) {
-      if ( $$legacy{$read}) {
-	  print "SHARED READ :: $pos -- $post_pos $read :: \n";
-#	  print "[$graph{ $pos }{'OUT'}{$post_pos}{$read} --";
-#	  print "$$legacy{$read}]\n";
-	$shared_read++;
-	last;
-      }
-    }
-    
-    
-    if ( $shared_read ) {
-#      my %new_legacy = (%{$graph{ 'S' }{'OUT'}{$start_pos}}, %{$graph{ $start_pos }{'OUT'}{$post_pos}});
-      my %new_legacy = (%{$graph{ $pos }{'OUT'}{$post_pos}}, %$legacy);
-      _path_finder ($pre_path .substr($post_pos, $kmer -1), $post_pos, \%new_legacy );
-    }
-    else {
-      print "Dropping path $pos $post_pos\n";
-    }
-  }
-  
-  
-}
-
-
-
-# 
-# 
-# 
-# Kim Brugger (14 Oct 2011)
-sub merge_singletons_old {
-
-  my $merged_nodes = 0;
-
-# Remove edges only supported by a few reads
-  my %handled = ('E' => 1);
- 
-  foreach my $node ( keys %graph ) {
-    
-    next if ( $handled{ $node } );
-
-    # there is only one arch out from this node.
-    if ( keys %{$graph{ $node }{'OUT'} } == 1) {
-      my $edge  = (keys %{$graph{ $node }{'OUT'}})[0];
-      # The next node has more than one incoming arch
-
-
-      next if ( keys %{$graph{ $edge }{'IN'}} > 1);
-
-      next if ( $handled{ $edge });
-
-      # Calculate the new key
-      my $merged_node = $node . substr($edge, $kmer - 1 );
-
-      if ( $graph{ $merged_node } ) {
-	print "$merged_node already exists\n";
-	next;
-      }
-
-#      print "$node  +  $edge -->  $merged_node\n";
-#      print_node( $node );
-#      print_node( $edge );
-
-      # create the new node with the new key
-      $graph{ $merged_node } = $graph{ $edge };
-      %{$graph{ $merged_node }{'IN'}} = %{$graph{ $node }{'IN'}} if ($graph{ $node }{'IN'});
-
-#      print "---- PRE ----\n";
-      
-      # rename all the Incomming connections from the upstream node
-      foreach my $pre ( keys %{$graph{ $merged_node }{'IN'} }) {
-
-	if ( ! $graph{$pre}) {
-	  print STDERR "PRE :: $pre does not exist!\n";
-	  next;
-	}
-#	print_node( $pre );
-	$graph{ $pre }{ 'OUT' }{ $merged_node } = $graph{ $pre }{ 'OUT' }{ $node };
-	delete($graph{ $pre }{ 'OUT' }{ $node });
-#	print_node( $pre );
-	
-      }
-
-#      print "---- POST ----\n";
-      # rename all the Incomming connections from the upstream node
-      foreach my $post ( keys %{$graph{ $merged_node }{'OUT'} }) {
-
-	if ( ! $graph{$post}) {
-	  print  "POST :: $post does not exist!\n";
-	  next;
-	}
-
-#	print_node( $post );
-	$graph{ $post }{ 'IN' }{ $merged_node } = $graph{ $post }{ 'IN' }{ $edge };
-	delete($graph{ $post }{ 'IN' }{ $edge });
-#	print_node( $post );
-	
-      }
-      
-      delete( $graph{ $node });
-      delete( $graph{ $edge });      
-
-#      print "----\n";
-#      print_node( $merged_node );
-#      print "-------\n\n";
-      
-
-      $handled{ $node }++;
-      $handled{ $edge }++;
-      $merged_nodes++;
-    }
-  }
-
-#  print Dumper( \%graph );
-  
-  return $merged_nodes;
-} 
-
-
-
-
-# 
-# 
-# 
-# Kim Brugger (06 Oct 2011)
-sub add_sequence_old {
-  my ($name, $seq, $kmer_counts, $reads) = @_;
-
-#  print "$seq\n";
-  
-  my $prev_node = "S";
-
-  for( my $i = 0; $i<length($seq) - $kmer; $i++) {
-    my $new_node = substr( $seq, $i, $kmer);
-
-
-    if ( $kmer_counts && $reads && 
-	 $$kmer_counts{ $new_node } < $reads*0.1 ){
-      $prev_node = undef;
-      next;
-    }
-	  
-    if ( $prev_node ) {
-#      print "$prev_node $new_node --> $$kmer_counts{ $new_node } $reads\n";
-
-      $graph{ $new_node }{'READS'}{ $name }++;
-      $graph{ $new_node }{'ID'   } = $kmer;
-
-      $graph{ $prev_node }{'OUT' }{ $new_node  }{$name}++;
-      $graph{ $new_node }{ 'IN'  }{ $prev_node }{$name}++;
-    }
-    $prev_node = $new_node;
-
-  }
-}
 
 

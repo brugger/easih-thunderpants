@@ -18,7 +18,7 @@ use DeBruijn;
 
 
 my %graph;
-my $kmer = 27;
+#my $kmer = 27;
 
 
 my $seq;
@@ -28,37 +28,16 @@ my $exit_counter = 200;
 my $reads = 0;
 my $name = 1;
 
-if (0) {
-  while(<>) {
-    chomp;
-    
-    if ( /\>/  ) {
-      if ( $seq ) {
-#      print "$name\n";
-	DeBruijn::add_sequence( $name, $seq );
-	last if ($exit_counter-- <= 0);
-	$seq = "";
-	$reads++;
-      }
-      $name++;
-#    $name = $_;
-    }
-    else {
-      $seq .= $_;
-    }
-  }
-}
-else {
-  DeBruijn::readin_file(shift);
-}
+DeBruijn::readin_file(shift);
 
 #DeBruijn::_merge_nodes('CACATTTCTTGGAGTACTCTACGTCTGAGT', 'TTTCTTGGAGTACTCTACGTCTGAGTG');
 #DeBruijn::_merge_nodes('CAATGGGACGGAGCGGGTGCGGTTCCT', 'AATGGGACGGAGCGGGTGCGGTTCCTG');
 #exit;
 
 DeBruijn::delete_low_weight();
-DeBruijn::drop_orphans();
+#DeBruijn::drop_orphans();
 
+#DeBruijn::collapse_start_frags();
 
 
 #DeBruijn::delete_low_weight();
@@ -71,8 +50,8 @@ while (DeBruijn::merge_singletons() ) {
 print STDERR "Done simplifying graph, ".DeBruijn::count_nodes()." nodes left\n";
 DeBruijn::drop_orphans();
 
-#DeBruijn::collapse_start_frags();
 
+DeBruijn::collapse_start_frags();
 
 #DeBruijn::_merge_nodes('TTTCTTGGAGTACTCTACGTCTGAGTG', 'CACATTTCTTGGAGTACTCTACGTCTGAGT');
 
